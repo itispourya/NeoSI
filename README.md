@@ -22,7 +22,7 @@ The benchmark suite uses a small set of task-specific evaluators. It is useful f
 
 The development subprocess runner is not an OS security boundary. In production, dynamic code execution is disabled unless Docker isolation is explicitly selected and a Docker daemon is actually available. If the Docker sandbox is requested but unavailable, Neo refuses execution instead of falling back to a normal subprocess.
 
-Self-evolution features do not imply unrestricted autonomous production changes. Model activation requires runtime verification; proposals and code changes should remain subject to review, tests, and rollback controls.
+Self-evolution features do not imply unrestricted autonomous production changes. Model activation requires runtime verification; proposals and code changes should remain subject to review, tests, and rollback controls. Configuration experiments are marked inconclusive until the candidate settings are actually applied. Code proposals are tested as standalone candidate modules in a temporary workspace; they are not full-repository integration tests or Git merges. Dataset preparation does not start model training or produce adapter weights.
 
 ## Quickstart — local development
 
