@@ -88,7 +88,7 @@ export class ReasoningEngine {
     const ragFormatted = formatRagContextForPrompt(rag);
 
     // Stage 5 & 6: Plan generation & DAG validation
-    const plan = taskPlanner.buildPlan(cleanQuery, input.autonomy || 'balanced');
+    const plan = await taskPlanner.buildAdaptivePlan(cleanQuery, input.autonomy || 'balanced', input.tenantId, input.scopes || ['read']);
     const stepStatuses: Array<{ stepIndex: number; title: string; actionType: string; status: string }> = [];
     const toolExecutions: Array<{ toolId: string; ok: boolean; durationMs: number }> = [];
     const evidenceUsed: string[] = [];
