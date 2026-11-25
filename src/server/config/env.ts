@@ -47,7 +47,7 @@ export const env = {
 
   // Persistence & Queue
   databaseUrl: process.env.DATABASE_URL || '',
-  sqliteDbPath: process.env.SQLITE_DB_PATH || './data/neo.sqlite',
+  sqliteDbPath: process.env.SQLITE_DB_PATH || './data/neo.db',
   redisUrl: process.env.REDIS_URL || '',
 
   // Sandbox & Evolution Controls
