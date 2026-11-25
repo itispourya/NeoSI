@@ -302,6 +302,8 @@ export class NeoModelRegistry implements ModelRegistry {
     const fallbackId = prevId || 'neo-embedded-core-v1';
     const target = await db.getModelById(fallbackId);
     if (!target) return null;
+    const readiness = await this.verifyModelReady(target.id);
+    if (!readiness.ready) return null;
 
     const allModels = await db.listModels();
     for (const m of allModels) {
