@@ -160,7 +160,9 @@ export function TasksView({ data, onRefresh }: TasksViewProps) {
 
               {selectedDetail.task.result && (
                 <div className="bg-[#0B0F17] border border-slate-800 rounded p-3 space-y-1">
-                  <div className="text-[11px] font-mono uppercase text-slate-400">Verified Output</div>
+                  <div className="text-[11px] font-mono uppercase text-slate-400">
+                    {selectedDetail.task.status === 'completed' ? 'Verified Output' : 'Partial Output'}
+                  </div>
                   <pre className="text-[11px] font-mono text-slate-200 whitespace-pre-wrap max-h-40 overflow-y-auto">
                     {String(selectedDetail.task.result.answer || JSON.stringify(selectedDetail.task.result, null, 2))}
                   </pre>
