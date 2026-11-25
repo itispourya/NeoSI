@@ -55,7 +55,7 @@ class DurableAgentRuntime {
   async createAndStartTask(input: StartTaskInput): Promise<TaskRecord> {
     const db = await getDb();
     const autonomy = input.autonomy || 'balanced';
-    const planResult = taskPlanner.buildPlan(input.goal, autonomy);
+    const planResult = await taskPlanner.buildAdaptivePlan(input.goal, autonomy, input.tenantId, input.scopes || ['read']);
     const budgets = {
       maxSteps: input.budgets?.maxSteps ?? planResult.budgets.maxSteps,
       maxToolCalls: input.budgets?.maxToolCalls ?? planResult.budgets.maxToolCalls,
