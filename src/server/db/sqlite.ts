@@ -1851,11 +1851,14 @@ export class SqliteNeoDatabase implements NeoDatabase {
 
   async upsertDynamicApi(input: Omit<DynamicApiRecord, 'id' | 'call_count' | 'created_at' | 'updated_at'>): Promise<DynamicApiRecord> {
     const existing = await this.getDynamicApiBySlug(input.slug);
+    if (existing && existing.tenant_id !== input.tenant_id) {
+      throw new Error('This endpoint slug is already reserved by another workspace.');
+    }
     const now = new Date().toISOString();
     if (existing) {
       this.db
         .prepare(
-          `UPDATE dynamic_apis SET name = ?, description = ?, method = ?, input_schema = ?, output_schema = ?, handler_code = ?, test_code = ?, test_report = ?, openapi_spec = ?, rate_limit_rpm = ?, enabled = ?, updated_at = ? WHERE slug = ?`
+          `UPDATE dynamic_apis SET name = ?, description = ?, method = ?, input_schema = ?, output_schema = ?, handler_code = ?, test_code = ?, test_report = ?, openapi_spec = ?, rate_limit_rpm = ?, enabled = ?, updated_at = ? WHERE slug = ? AND tenant_id = ?`
         )
         .run(
           input.name,
@@ -1870,9 +1873,10 @@ export class SqliteNeoDatabase implements NeoDatabase {
           input.rate_limit_rpm,
           input.enabled ? 1 : 0,
           now,
-          input.slug
+          input.slug,
+          input.tenant_id
         );
-      return (await this.getDynamicApiBySlug(input.slug))!;
+      return (await this.getDynamicApiBySlug(input.slug, input.tenant_id))!;
     }
     const rec: DynamicApiRecord = { ...input, id: uuidv4(), call_count: 0, created_at: now, updated_at: now };
     this.db
@@ -1901,8 +1905,8 @@ export class SqliteNeoDatabase implements NeoDatabase {
     return rec;
   }
 
-  async incrementDynamicApiCalls(slug: string): Promise<void> {
-    this.db.prepare('UPDATE dynamic_apis SET call_count = call_count + 1 WHERE slug = ?').run(slug);
+  async incrementDynamicApiCalls(slug: string, tenantId: string): Promise<void> {
+    this.db.prepare('UPDATE dynamic_apis SET call_count = call_count + 1 WHERE slug = ? AND tenant_id = ?').run(slug, tenantId);
   }
 
   async toggleDynamicApi(slug: string, enabled: boolean, tenantId?: string): Promise<DynamicApiRecord | null> {
