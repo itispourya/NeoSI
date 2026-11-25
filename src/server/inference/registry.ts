@@ -343,11 +343,21 @@ export class NeoInferenceEngine implements InferenceEngine {
       chain.push({ runtime, modelId });
     };
 
+    const db = await getDb();
+    if (req.strictTarget) {
+      if (!req.preferredRuntime || !req.preferredModelId) throw new Error('Strict inference requires both preferredRuntime and preferredModelId.');
+      const target = await db.getModelById(req.preferredModelId);
+      if (!target) throw new Error('Strict inference target is not registered.');
+      if (target.runtime !== req.preferredRuntime) throw new Error('Strict inference runtime does not match the registered model runtime.');
+      if (!this.runtimes[req.preferredRuntime]?.isConfigured()) throw new Error('Strict inference runtime is not configured.');
+      pushUnique(req.preferredRuntime, req.preferredModelId);
+      return chain;
+    }
+
     if (req.preferredRuntime && this.runtimes[req.preferredRuntime]?.isConfigured()) {
       pushUnique(req.preferredRuntime, req.preferredModelId || env.primaryModel);
     }
 
-    const db = await getDb();
     const models = await db.listModels();
     const role = req.role || 'primary';
     const activeForRole = models.filter(
