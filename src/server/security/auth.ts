@@ -26,6 +26,16 @@ const rateBuckets = new Map<string, number[]>();
 export function checkRateLimit(bucketKey: string, maxRpm: number): { allowed: boolean; limit: number; remaining: number; resetMs: number } {
   const now = Date.now();
   const windowStart = now - 60_000;
+  if (rateBuckets.size > 10_000) {
+    for (const [key, values] of rateBuckets) {
+      if (!values.length || values[values.length - 1] <= windowStart) rateBuckets.delete(key);
+    }
+    while (rateBuckets.size > 10_000) {
+      const oldestKey = rateBuckets.keys().next().value;
+      if (!oldestKey) break;
+      rateBuckets.delete(oldestKey);
+    }
+  }
   const timestamps = (rateBuckets.get(bucketKey) || []).filter((t) => t > windowStart);
   if (timestamps.length >= maxRpm) {
     const oldest = timestamps[0] || now;
@@ -91,8 +101,8 @@ export async function verifyAdminCredential(passcode: string): Promise<boolean> 
 export async function claimInitialAdminPasscode(passcode: string): Promise<{ ok: boolean; error?: string }> {
   const state = await getAdminLockState();
   if (state.locked) return { ok: false, error: 'Admin access is already configured and locked.' };
-  if (!passcode || passcode.length < 12) {
-    return { ok: false, error: 'Passcode must be at least 12 characters.' };
+  if (!passcode || passcode.length < 12 || passcode.length > 256) {
+    return { ok: false, error: 'Passcode must be between 12 and 256 characters.' };
   }
   const db = await getDb();
   // Atomic insert prevents two concurrent first-run requests (including across instances) from both claiming admin.
