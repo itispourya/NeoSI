@@ -4,17 +4,32 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const EPHEMERAL_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+const nodeEnv = process.env.NODE_ENV || 'development';
+const configuredSessionSecret = process.env.NEO_SESSION_SECRET || '';
+const port = Number(process.env.PORT || process.env.NEO_PORT || 3000);
+const trustProxyHops = Number(process.env.NEO_TRUST_PROXY_HOPS || 0);
+const runtimeDefault = (process.env.NEO_RUNTIME_DEFAULT || 'auto') as RuntimeBackendKind;
+const sandboxMode = (process.env.NEO_SANDBOX_MODE || 'subprocess') as SandboxModeKind;
+
+if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT/NEO_PORT must be an integer between 1 and 65535.');
+if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0 || trustProxyHops > 10) throw new Error('NEO_TRUST_PROXY_HOPS must be an integer between 0 and 10.');
+if (!['auto', 'vllm', 'ollama', 'tensorrt-llm', 'transformers', 'embedded'].includes(runtimeDefault)) throw new Error('NEO_RUNTIME_DEFAULT is not a supported runtime.');
+if (!['subprocess', 'docker'].includes(sandboxMode)) throw new Error('NEO_SANDBOX_MODE must be subprocess or docker.');
+if (nodeEnv === 'production' && Buffer.byteLength(configuredSessionSecret, 'utf8') < 32) {
+  throw new Error('NEO_SESSION_SECRET must be explicitly configured with at least 32 bytes in production.');
+}
 
 export type RuntimeBackendKind = 'auto' | 'vllm' | 'ollama' | 'tensorrt-llm' | 'transformers' | 'embedded';
 export type SandboxModeKind = 'subprocess' | 'docker';
 
 export const env = {
-  nodeEnv: process.env.NODE_ENV || 'development',
-  port: Number(process.env.PORT || process.env.NEO_PORT || 3000),
+  nodeEnv,
+  port,
+  trustProxyHops,
   appUrl: process.env.APP_URL || process.env.NEO_URL || 'http://localhost:3000',
 
   // Neo Sovereign Neural Compute Runtimes (zero external cloud AI dependency)
-  runtimeDefault: (process.env.NEO_RUNTIME_DEFAULT || 'auto') as RuntimeBackendKind,
+  runtimeDefault,
   ollamaBaseUrl: process.env.NEO_OLLAMA_URL || process.env.NEO_OLLAMA_BASE_URL || process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
   vllmBaseUrl: process.env.NEO_VLLM_URL || process.env.NEO_VLLM_BASE_URL || '',
   trtLlmBaseUrl: process.env.NEO_TRTLLM_URL || process.env.NEO_TENSORRT_LLM_BASE_URL || '',
@@ -32,10 +47,11 @@ export const env = {
 
   // Persistence & Queue
   databaseUrl: process.env.DATABASE_URL || '',
+  sqliteDbPath: process.env.SQLITE_DB_PATH || './data/neo.sqlite',
   redisUrl: process.env.REDIS_URL || '',
 
   // Sandbox & Evolution Controls
-  sandboxMode: (process.env.NEO_SANDBOX_MODE || 'subprocess') as SandboxModeKind,
+  sandboxMode,
   autoMergeSafeUpgrades: (process.env.AUTO_MERGE_SAFE_UPGRADES || process.env.NEO_AUTO_MERGE_SAFE_UPGRADES) === 'true',
   schedulerEnabled: process.env.NEO_SCHEDULER_ENABLED !== 'false',
   knowledgeDaemonIntervalMs: Number(process.env.KNOWLEDGE_DAEMON_INTERVAL_MS || process.env.NEO_KNOWLEDGE_INTERVAL_MS || 900_000),
@@ -44,7 +60,7 @@ export const env = {
   // Security Controls (fail-closed defaults)
   adminPasscode: process.env.NEO_ADMIN_PASSCODE || process.env.ADMIN_PASSCODE || '',
   webhookSecret: process.env.NEOS_WEBHOOK_SECRET || '',
-  sessionSecret: process.env.NEO_SESSION_SECRET || EPHEMERAL_SESSION_SECRET,
+  sessionSecret: configuredSessionSecret || EPHEMERAL_SESSION_SECRET,
   corsAllowedOrigins: (process.env.NEO_CORS_ORIGINS || '')
     .split(',')
     .map((s) => s.trim())
