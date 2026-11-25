@@ -106,7 +106,7 @@ export class ReasoningEngine {
       const res = await toolRegistry.executeTool(step.toolId, step.toolInput || {}, {
         tenantId: input.tenantId,
         actor: input.actor,
-        scopes: input.scopes || ['read', 'write'],
+        scopes: input.scopes || ['read'],
       });
       toolExecutions.push({ toolId: step.toolId, ok: res.ok, durationMs: res.durationMs });
       toolOutputsForCritic.push({ toolId: step.toolId, ok: res.ok, output: res.output, error: res.error });
@@ -115,8 +115,8 @@ export class ReasoningEngine {
         evidenceUsed.push(sanitized.wrappedData);
         stepStatuses.push({ stepIndex: step.stepIndex, title: step.title, actionType: step.actionType, status: 'completed' });
       } else {
-        // Stage 9 & 10: Error diagnosis & graceful recovery without stalling
-        stepStatuses.push({ stepIndex: step.stepIndex, title: step.title, actionType: step.actionType, status: 'recovered' });
+        // A failed tool is recorded as failed. Continuing synthesis does not convert it into a recovery.
+        stepStatuses.push({ stepIndex: step.stepIndex, title: step.title, actionType: step.actionType, status: 'failed' });
       }
     }
 
@@ -125,6 +125,9 @@ export class ReasoningEngine {
       input.context ? `Workspace Context:\n${JSON.stringify(input.context).slice(0, 1800)}` : '',
       ragFormatted ? `Retrieved Context:\n${ragFormatted}` : '',
       evidenceUsed.length > 0 ? `Tool Evidence:\n${evidenceUsed.join('\n')}` : '',
+      toolOutputsForCritic.some((tool) => !tool.ok)
+        ? `Tool Failures (do not claim these actions succeeded):\n${toolOutputsForCritic.filter((tool) => !tool.ok).map((tool) => `${tool.toolId}: ${tool.error || 'failed'}`).join('\n')}`
+        : '',
       `User Request: ${cleanQuery}`,
     ].filter(Boolean);
 
@@ -156,12 +159,6 @@ export class ReasoningEngine {
     if (!verification.passed && verification.issues.length > 0) {
       // Recovery step: append deterministic warning / recomputed correction if critic caught inconsistency
       answer = `${answer}\n\n[Verification Notice: ${verification.issues.join(' ')}]`;
-      verification = criticEngine.verify({
-        goal: cleanQuery,
-        draftResponse: answer,
-        evidenceSnippets: evidenceUsed,
-        toolOutputs: toolOutputsForCritic,
-      });
     }
 
     stepStatuses.push({
