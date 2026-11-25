@@ -90,15 +90,16 @@ export async function verifyAdminCredential(passcode: string): Promise<boolean> 
 
 export async function claimInitialAdminPasscode(passcode: string): Promise<{ ok: boolean; error?: string }> {
   const state = await getAdminLockState();
-  if (state.locked) {
-    return { ok: false, error: 'Admin access is already configured and locked.' };
-  }
-  if (!passcode || passcode.length < 8) {
-    return { ok: false, error: 'Passcode must be at least 8 characters.' };
+  if (state.locked) return { ok: false, error: 'Admin access is already configured and locked.' };
+  if (!passcode || passcode.length < 12) {
+    return { ok: false, error: 'Passcode must be at least 12 characters.' };
   }
   const db = await getDb();
-  await db.setAdminConfig('admin_passcode_hash', hashPasscode(passcode));
-  return { ok: true };
+  // Atomic insert prevents two concurrent first-run requests (including across instances) from both claiming admin.
+  const claimed = await db.setAdminConfigIfAbsent('admin_passcode_hash', hashPasscode(passcode));
+  return claimed
+    ? { ok: true }
+    : { ok: false, error: 'Admin access was claimed by another request. Sign in with the configured passcode.' };
 }
 
 function extractBearerOrKey(req: Request): string | null {
@@ -132,7 +133,9 @@ export async function requireAdminConsoleAuth(req: Request, res: Response, next:
   const db = await getDb();
   const tenants = await db.listTenants();
   const requestedTenant = req.header('x-neo-workspace');
-  const activeTenant = (requestedTenant && (await db.getTenantById(requestedTenant))) || tenants[0];
+  const activeTenant = requestedTenant ? await db.getTenantById(requestedTenant) : tenants[0];
+  if (requestedTenant && !activeTenant) return res.status(403).json({ error: 'Requested workspace is not available to this administrator.' });
+  if (!activeTenant) return res.status(503).json({ error: 'No workspace is configured.' });
 
   req.neoAuth = {
     actorType: 'admin',
@@ -185,7 +188,9 @@ export function requireApiGatewayAuth(requiredScope = 'read') {
     if (rawCredential && verifyAdminToken(rawCredential)) {
       const tenants = await db.listTenants();
       const requestedTenant = req.header('x-neo-workspace');
-      const activeTenant = (requestedTenant && (await db.getTenantById(requestedTenant))) || tenants[0];
+      const activeTenant = requestedTenant ? await db.getTenantById(requestedTenant) : tenants[0];
+      if (requestedTenant && !activeTenant) return res.status(403).json({ error: 'Requested workspace is not available to this administrator.' });
+      if (!activeTenant) return res.status(503).json({ error: 'No workspace is configured.' });
       const limit = checkRateLimit(`admin:${activeTenant.id}`, activeTenant.rate_limit_rpm);
       res.setHeader('X-RateLimit-Limit', String(limit.limit));
       res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
