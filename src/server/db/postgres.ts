@@ -60,7 +60,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
   }
 
   async init(): Promise<void> {
-    for (const file of ['001_init.sql', '002_neo_cognitive_core.sql', '003_neo_upgrade.sql']) {
+    for (const file of ['001_init.sql', '002_neo_cognitive_core.sql', '003_neo_upgrade.sql', '004_promoted_upgrade_status.sql']) {
       const migrationPath = path.resolve(process.cwd(), 'migrations', file);
       if (fs.existsSync(migrationPath)) {
         const sql = fs.readFileSync(migrationPath, 'utf8');
