@@ -142,6 +142,9 @@ forgeRouter.get('/openapi.json', requireApiGatewayAuth('admin'), async (_req, re
 });
 
 forgeRouter.all('/custom/:slug', requireApiGatewayAuth('read'), async (req, res) => {
+  if (!['GET', 'HEAD'].includes(req.method) && !req.neoAuth!.scopes.includes('write') && !req.neoAuth!.scopes.includes('admin')) {
+    return res.status(403).json({ error: 'Write scope is required for mutating custom API requests.' });
+  }
   const slug = String(req.params.slug);
   const tenantId = req.neoAuth!.tenant.id;
   const db = await getDb();
