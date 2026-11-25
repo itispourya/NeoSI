@@ -182,6 +182,7 @@ export interface NeoDatabase {
 
   // Knowledge Graph
   upsertEntity(input: Omit<GraphEntityRecord, 'id' | 'created_at' | 'updated_at'>): Promise<GraphEntityRecord>;
+  getEntityById(id: string, tenantId: string): Promise<GraphEntityRecord | null>;
   listEntities(tenantId: string, opts?: { entityType?: string; query?: string; limit?: number }): Promise<GraphEntityRecord[]>;
   addRelationship(input: Omit<GraphRelationshipRecord, 'id' | 'created_at'>): Promise<GraphRelationshipRecord>;
   listRelationships(tenantId: string, entityId?: string, limit?: number): Promise<GraphRelationshipRecord[]>;
@@ -287,8 +288,8 @@ export interface NeoDatabase {
 
   // Telemetry & Audit Logs
   recordTelemetry(input: Omit<LlmTelemetryRecord, 'id' | 'created_at'>): Promise<void>;
-  listTelemetry(limit?: number): Promise<LlmTelemetryRecord[]>;
-  getTelemetrySummary(): Promise<{
+  listTelemetry(limit?: number, tenantId?: string): Promise<LlmTelemetryRecord[]>;
+  getTelemetrySummary(tenantId?: string): Promise<{
     totalCalls: number;
     successRate: number;
     totalTokens: number;
