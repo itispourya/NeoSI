@@ -34,6 +34,11 @@ test('SSRF validator blocks loopback, link-local metadata, and private IP ranges
   assert.equal(validateExternalUrl('http://127.0.0.1:8080/admin').valid, false);
   assert.equal(validateExternalUrl('http://169.254.169.254/latest/meta-data').valid, false);
   assert.equal(validateExternalUrl('http://192.168.1.50/internal').valid, false);
+  assert.equal(validateExternalUrl('http://198.51.100.14/documentation').valid, false);
+  assert.equal(validateExternalUrl('http://203.0.113.9/documentation').valid, false);
+  assert.equal(validateExternalUrl('http://[2001:db8::1]/documentation').valid, false);
+  assert.equal(validateExternalUrl('http://[2002:c000:0201::1]/6to4').valid, false);
+  assert.equal(validateExternalUrl('http://[64:ff9b::a9fe:a9fe]/nat64').valid, false);
   assert.equal(validateExternalUrl('file:///etc/passwd').valid, false);
   assert.equal(validateExternalUrl('https://api.github.com/repos').valid, true);
 });
