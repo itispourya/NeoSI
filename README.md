@@ -5,12 +5,12 @@ Neo is a self-hosted cognitive and agent runtime for local inference, tool execu
 ## What is included
 
 - **Inference and model registry** — Local runtime adapters, hardware inspection, model registration, installation, runtime readiness probes, activation, rollback, and strict-target benchmarking.
-- **Cognitive services** — Request classification, planning, tool routing, reasoning orchestration, and critic-based verification.
+- **Cognitive services** — Intent classification, adaptive planning with an activated local reasoning model when available, schema- and permission-validated tool selection, deterministic fallback planning, reasoning orchestration, and evidence-aware critic checks.
 - **Agent runtime** — Persistent tasks, checkpoints, cancellation, recovery, permission-preserving resume, and explicit `completed`, `partial`, and `failed` outcomes.
 - **Memory and knowledge** — Typed memory, workspace-aware retrieval, temporal metadata, source provenance, consolidation, knowledge research, and tenant-validated graph relationships.
 - **Tool and API runtime** — Built-in tools, MCP JSON-RPC, API generation, and OpenAPI metadata.
 - **Evolution services** — Skill evaluation, experiments, upgrade proposals, code-generation evaluation, and training-data preparation.
-- **Security controls** — Scrypt admin credentials, scoped API keys, rate limits, tenant-scoped data access in the protected paths, DNS-pinned outbound requests, same-origin redirect policy, bounded response streaming, and fail-closed production code execution.
+- **Security controls** — Scrypt admin credentials, console-only administration of shared system resources, scoped workspace API keys, rate limits, tenant-scoped data access, collision-safe workspace API slugs, DNS-pinned outbound requests, same-origin redirect policy, bounded response streaming, and fail-closed production code execution.
 
 ## Important capability boundaries
 
@@ -22,7 +22,7 @@ The benchmark suite uses a small set of task-specific evaluators. It is useful f
 
 The development subprocess runner is not an OS security boundary. In production, dynamic code execution is disabled unless Docker isolation is explicitly selected and a Docker daemon is actually available. If the Docker sandbox is requested but unavailable, Neo refuses execution instead of falling back to a normal subprocess.
 
-Self-evolution features do not imply unrestricted autonomous production changes. Model activation requires runtime verification; proposals and code changes should remain subject to review, tests, and rollback controls. Configuration experiments are marked inconclusive until the candidate settings are actually applied. Code proposals are tested as standalone candidate modules in a temporary workspace; they are not full-repository integration tests or Git merges. Dataset preparation does not start model training or produce adapter weights.
+The planner uses a local reasoning model only when an active model is confirmed in a healthy configured runtime. Model-generated plans are constrained to registered tools, granted scopes, risk levels, and validated input schemas. When no usable model is available, Neo falls back to a deterministic bounded plan.\n\nSelf-evolution features do not imply unrestricted autonomous production changes. Model activation requires runtime verification; proposals and code changes should remain subject to review, tests, and rollback controls. Configuration experiments are marked inconclusive until the candidate settings are actually applied. Code proposals are tested as standalone candidate modules in a temporary workspace; they are not full-repository integration tests or Git merges. Dataset preparation does not start model training or produce adapter weights.
 
 ## Quickstart — local development
 
