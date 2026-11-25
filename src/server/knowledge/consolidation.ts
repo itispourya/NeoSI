@@ -15,11 +15,12 @@ export interface ConsolidationSummary {
  * Periodically transforms repeated episodic experiences into durable semantic/procedural knowledge,
  * expires stale working memory, and detects contradicting claims across stored memories.
  */
-export async function runMemoryConsolidation(): Promise<ConsolidationSummary> {
+export async function runMemoryConsolidation(tenantId = 'global'): Promise<ConsolidationSummary> {
   const db = await getDb();
-  const working = await db.listMemories({ memoryType: 'working', limit: 100 });
-  const episodic = await db.listMemories({ memoryType: 'episodic', limit: 100 });
-  const semantic = await db.listMemories({ memoryType: 'semantic', limit: 100 });
+  // Consolidation only touches records explicitly owned by the requested workspace.
+  const working = await db.listMemories({ memoryType: 'working', tenantId, limit: 100 });
+  const episodic = await db.listMemories({ memoryType: 'episodic', tenantId, limit: 100 });
+  const semantic = await db.listMemories({ memoryType: 'semantic', tenantId, limit: 100 });
 
   let prunedExpiredWorking = 0;
   let consolidatedSemantic = 0;
