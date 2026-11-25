@@ -28,7 +28,7 @@ export class CognitiveOrchestrator {
         goal: req.query,
         autonomy: req.autonomy || 'balanced',
         priority: req.priority || 'user_task',
-        scopes: req.scopes || ['read', 'write'],
+        scopes: req.scopes || ['read'],
       });
       return {
         mode: 'async_task',
