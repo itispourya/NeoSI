@@ -37,6 +37,13 @@ export class NeoKnowledgeGraph {
     validTo?: string | null;
   }): Promise<GraphRelationshipRecord> {
     const db = await getDb();
+    const [source, target] = await Promise.all([
+      db.getEntityById(input.sourceEntityId, input.tenantId),
+      db.getEntityById(input.targetEntityId, input.tenantId),
+    ]);
+    if (!source || !target) {
+      throw new Error('Both relationship endpoints must exist in the authenticated workspace.');
+    }
     // Detect existing relationship with same source & relationType pointing to different target (contradiction tracking)
     const existing = await db.listRelationships(input.tenantId, input.sourceEntityId, 50);
     let contradictsId: string | null = null;
