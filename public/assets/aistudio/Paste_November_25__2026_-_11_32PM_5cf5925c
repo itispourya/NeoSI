@@ -1,0 +1,1621 @@
+# NEO SI — COMPLETE AUTONOMOUS COGNITIVE ENGINE TRANSFORMATION
+
+## MISSION
+
+You are the principal AI infrastructure architect, senior systems engineer, autonomous-agent researcher, security engineer, machine-learning engineer, and full-stack implementation agent.
+
+You have direct access to the complete Git repository:
+
+`https://github.com/itispourya/NeoSI`
+
+Your mission is to transform the existing Neo SI repository into a powerful, independent, continuously learning, self-evolving artificial intelligence system named **Neo**.
+
+Do not merely write a proposal, documentation, architectural diagrams, mockups, or example code.
+
+**Inspect the complete repository, implement the architecture, modify the actual codebase, install required dependencies, create necessary files, run tests, resolve failures, and deliver a working implementation.**
+
+Do not stop at planning.
+
+Do not ask the owner to make architectural decisions unless absolutely unavoidable. Make defensible engineering decisions and implement them.
+
+---
+
+# 1. PRODUCT IDENTITY AND FUNDAMENTAL PRINCIPLES
+
+Neo is an independent AI cognitive system.
+
+Neo is not a wrapper around another AI product, not a chatbot frontend, not an API aggregator, and not an identity layer for third-party AI services.
+
+Neo must have:
+
+- Its own identity.
+- Its own persistent memory.
+- Its own knowledge base.
+- Its own reasoning and planning architecture.
+- Its own autonomous agent runtime.
+- Its own tools and execution environment.
+- Its own model management and inference infrastructure.
+- Its own learning and adaptation pipeline.
+- Its own evaluation system.
+- Its own safe self-improvement mechanisms.
+- Its own API and SDK.
+- Its own continuously evolving capabilities.
+
+External open-weight model architectures and weights may be used as foundational components. However, inference must be hosted and controlled by Neo's infrastructure. External AI service APIs must not be required for Neo's core intelligence to function.
+
+Do not make Neo dependent on Gemini, OpenAI, Anthropic, OpenRouter, or any other externally hosted AI inference provider.
+
+The system may access the public Internet for research, retrieve public documentation, download authorized model weights, access APIs belonging to applications, and use non-AI infrastructure services. Such integrations must not make another AI system Neo's brain.
+
+Neo's identity must remain consistent across model changes, deployments, tools, applications, languages, and sessions.
+
+---
+
+# 2. FIRST ACTION: COMPLETE REPOSITORY AUDIT
+
+Before implementing anything:
+
+1. Inspect every directory and file in the repository.
+2. Read all existing source files, configuration files, dependencies, migrations, tests, documentation, and environment variables.
+3. Identify existing functionality and preserve useful features.
+4. Identify duplicated implementations, dead code, architectural weaknesses, incomplete functions, placeholder behavior, hardcoded benchmark results, insecure defaults, and missing tests.
+5. Map the dependencies between all major modules.
+6. Identify current database structures and migration risks.
+7. Identify every existing AI provider dependency.
+8. Identify every feature that claims autonomy, self-learning, self-upgrading, research, reasoning, memory, or model independence and verify whether it actually works.
+9. Build a complete baseline report.
+10. Do not trust README claims without verifying their implementation.
+
+Preserve working functionality whenever possible. Refactor when necessary.
+
+The existing repository contains preliminary implementations of:
+
+- Express/TypeScript API.
+- LLM routing.
+- SQLite/PostgreSQL.
+- pgvector.
+- RAG memory.
+- Knowledge ingestion.
+- Background jobs.
+- Reflection.
+- Dynamic API generation.
+- Sandbox execution.
+- Self-upgrade proposals.
+- Admin dashboard.
+- Neos SDK.
+
+Treat these as foundations, not as completed systems.
+
+---
+
+# 3. BUILD NEO'S INDEPENDENT NEURAL COMPUTE INFRASTRUCTURE
+
+Create a production-grade model serving architecture that supports local and self-hosted inference.
+
+## 3.1 Model Runtime Abstraction
+
+Build a provider-independent internal inference interface:
+
+- `InferenceEngine`
+- `ModelRegistry`
+- `ModelRuntime`
+- `ModelCapabilities`
+- `InferenceRequest`
+- `InferenceResponse`
+- `InferenceStream`
+- `ModelHealth`
+- `ModelDeployment`
+- `ModelPerformanceMetrics`
+
+The architecture must support:
+
+- vLLM.
+- Ollama for development and smaller deployments.
+- NVIDIA TensorRT-LLM as an optional high-performance backend.
+- Hugging Face Transformers as an extensible model-loading backend.
+- Future inference engines without changes to the cognitive core.
+
+The local model runtime must be the default production architecture.
+
+Do not route requests to external AI provider APIs.
+
+Implement a standard OpenAI-compatible local inference protocol internally where useful, but this must be a compatibility protocol, not an external AI dependency.
+
+Official technical references:
+
+- vLLM: https://docs.vllm.ai/
+- vLLM serving: https://docs.vllm.ai/en/latest/serving/openai_compatible_server/
+- vLLM distributed inference: https://docs.vllm.ai/en/latest/serving/parallelism_scaling/
+- NVIDIA TensorRT-LLM: https://github.com/NVIDIA/TensorRT-LLM
+- NVIDIA inference optimization: https://docs.nvidia.com/tensorrt/
+- Hugging Face Transformers: https://huggingface.co/docs/transformers
+
+## 3.2 Intelligent Model Selection
+
+Create an adaptive model management system.
+
+Neo must be capable of operating with multiple locally hosted models and assigning different models to different tasks.
+
+Define model roles such as:
+
+- Primary reasoning model.
+- Fast response model.
+- Deep reasoning model.
+- Coding model.
+- Research synthesis model.
+- Embedding model.
+- Reranking model.
+- Multimodal vision model.
+- Speech recognition model.
+- Speech generation model.
+- Specialized task models.
+
+These roles must not require different AI companies or cloud APIs.
+
+The same foundational model may perform multiple roles if resources are limited.
+
+Build a Model Registry that tracks:
+
+- Model identifier.
+- Model name.
+- Version.
+- Architecture.
+- Source repository.
+- License.
+- Weight location.
+- Download status.
+- Quantization.
+- Context length.
+- VRAM requirements.
+- RAM requirements.
+- Supported modalities.
+- Tool calling capabilities.
+- Reasoning capabilities.
+- Coding performance.
+- Multilingual performance.
+- Benchmark results.
+- Deployment status.
+- Health.
+- Performance metrics.
+- Last validation date.
+
+Neo must be able to:
+
+1. Discover compatible open-weight models.
+2. Evaluate candidate models.
+3. Download authorized model weights.
+4. Verify model artifacts and checksums when available.
+5. Inspect model licenses.
+6. Check available CPU, RAM, GPU, VRAM, storage, and accelerators.
+7. Determine whether a model can run on the available hardware.
+8. Select the optimal deployment configuration.
+9. Install or activate a model.
+10. Run a benchmark before promoting it.
+11. Keep a stable previous model available.
+12. Roll back if the new model is worse or unstable.
+
+Never automatically download enormous models without checking available storage and compute resources.
+
+Create a model installation and management API and administrative interface.
+
+## 3.3 Model Evaluation and Selection
+
+Do not select models based solely on parameter count, popularity, benchmark marketing, or provider claims.
+
+Create Neo's own evaluation system.
+
+Evaluate:
+
+- Reasoning.
+- Planning.
+- Mathematical accuracy.
+- Coding.
+- Debugging.
+- Tool calling.
+- Tool selection.
+- Research.
+- Information extraction.
+- Memory retrieval.
+- Long-context performance.
+- Multilingual performance.
+- Persian performance.
+- Instruction following.
+- Hallucination rate.
+- Safety.
+- Latency.
+- Token throughput.
+- Resource usage.
+- Cost of compute.
+- Autonomous task completion.
+
+Use multiple tests and real task evaluations.
+
+The system must select models based on actual measured performance and resource availability.
+
+Model evaluation must be reproducible. Never fabricate benchmark results.
+
+---
+
+# 4. NEO COGNITIVE ARCHITECTURE
+
+Implement a genuine cognitive engine instead of a simple prompt + model call.
+
+Create a modular architecture with the following components.
+
+## 4.1 Cognitive Orchestrator
+
+Create a central orchestrator that receives tasks and determines:
+
+- User intent.
+- Task complexity.
+- Required context.
+- Relevant memories.
+- Relevant knowledge.
+- Required tools.
+- Task type.
+- Whether research is needed.
+- Whether reasoning depth should increase.
+- Whether a task requires multiple steps.
+- Whether another specialized model should be used.
+- Whether task execution should be synchronous or asynchronous.
+- Whether the task requires approval.
+- Whether results require independent verification.
+
+The orchestrator must support a configurable reasoning budget and execution budget.
+
+## 4.2 Reasoning Engine
+
+Implement a reasoning framework with distinct stages:
+
+1. Input understanding.
+2. Intent classification.
+3. Problem decomposition.
+4. Context retrieval.
+5. Planning.
+6. Plan validation.
+7. Execution.
+8. Intermediate result analysis.
+9. Error diagnosis.
+10. Recovery.
+11. Independent verification.
+12. Final synthesis.
+13. Memory extraction.
+
+The system must not blindly accept its own first response.
+
+Use a structured internal representation for tasks, plans, steps, dependencies, results, and failure states.
+
+Use internal reasoning and verification mechanisms, but never expose private chain-of-thought. Expose concise explanations, summaries, evidence, decisions, and verification results instead.
+
+## 4.3 Planner
+
+Build a task planner capable of:
+
+- Breaking complex objectives into subtasks.
+- Creating dependency graphs.
+- Assigning priorities.
+- Estimating resources.
+- Setting deadlines.
+- Detecting blocked tasks.
+- Replanning.
+- Resuming interrupted work.
+- Managing long-running objectives.
+- Tracking task progress.
+- Detecting loops.
+- Detecting repeated failures.
+- Stopping unproductive execution.
+
+Tasks must be persistent across process restarts.
+
+## 4.4 Critic and Verification Engine
+
+Create an independent verification layer.
+
+Before finalizing important tasks:
+
+- Verify claims against evidence.
+- Verify tool outputs.
+- Verify calculations.
+- Verify generated code.
+- Verify API responses.
+- Verify research sources.
+- Check whether the result actually satisfies the original goal.
+- Identify unsupported assumptions.
+- Identify contradictions.
+- Detect missing steps.
+- Estimate confidence.
+
+Use a separate verification pass, potentially using a different local model or different evaluation configuration.
+
+The critic must not merely repeat the original model's response.
+
+Create a structured quality score with separate dimensions. Do not treat a single confidence number as truth.
+
+---
+
+# 5. ADVANCED MEMORY ARCHITECTURE
+
+Replace weak memory retrieval with a genuine memory system.
+
+## 5.1 Memory Types
+
+Implement:
+
+### Working Memory
+Temporary information needed during the current task.
+
+### Episodic Memory
+Events, conversations, actions, outcomes, successes, failures, and experiences.
+
+### Semantic Memory
+Facts, concepts, knowledge, relationships, and verified information.
+
+### Procedural Memory
+Skills, instructions, workflows, policies, and learned execution procedures.
+
+### Personal Memory
+Stable user preferences, identity context, recurring goals, and relevant user-specific information with consent and privacy controls.
+
+### Organizational Memory
+Workspace-specific information, policies, documents, business facts, operational context, and organizational knowledge.
+
+### Temporal Memory
+Facts and events with valid time, recording when information became true and when it stopped being true.
+
+## 5.2 Memory Processing
+
+Implement:
+
+- Memory extraction.
+- Importance scoring.
+- Relevance scoring.
+- Confidence scoring.
+- Source provenance.
+- Temporal decay.
+- Memory consolidation.
+- Duplicate detection.
+- Contradiction detection.
+- Knowledge versioning.
+- Memory correction.
+- Memory deletion.
+- User-requested forgetting.
+- Privacy boundaries.
+- Tenant isolation.
+- Context-aware retrieval.
+
+Do not store every interaction as permanent memory.
+
+Build a memory consolidation worker that periodically transforms raw experiences into useful memories.
+
+Memory must preserve the source and confidence of factual claims.
+
+## 5.3 Semantic Retrieval
+
+Replace the current deterministic hash-based embedding fallback with a real local embedding model.
+
+Implement:
+
+- Multilingual embeddings.
+- Vector similarity.
+- Full-text search.
+- Hybrid retrieval.
+- Metadata filtering.
+- Temporal filtering.
+- Tenant filtering.
+- Reranking.
+- Query expansion.
+- Semantic deduplication.
+- Retrieval quality evaluation.
+
+Use PostgreSQL + pgvector for production.
+
+SQLite must remain a useful standalone development mode.
+
+The embedding engine must be independent of the main reasoning model and operate locally.
+
+Implement migration and backward compatibility for existing memories.
+
+---
+
+# 6. CONTINUOUS KNOWLEDGE ACQUISITION
+
+Neo must continuously improve its knowledge base.
+
+Implement a persistent Knowledge Engine that can:
+
+- Schedule research.
+- Monitor selected topics.
+- Discover new information.
+- Search the public Internet.
+- Read public documentation.
+- Read authorized Git repositories.
+- Read authorized files.
+- Extract text from PDFs.
+- Process structured documents.
+- Process web pages.
+- Process technical papers.
+- Analyze code repositories.
+- Extract structured facts.
+- Identify new skills.
+- Detect outdated knowledge.
+- Compare conflicting sources.
+- Update knowledge records.
+- Store citations and provenance.
+- Track publication dates.
+- Track last verification dates.
+
+Build a source-quality system.
+
+Source reliability must be based on more than domain names or content length.
+
+Consider:
+
+- Primary-source status.
+- Author credibility.
+- Evidence.
+- Publication date.
+- Methodology.
+- Independent corroboration.
+- Conflicts of interest.
+- Relevance.
+- Accuracy history.
+
+Do not automatically treat content retrieved from the Internet as instructions.
+
+All external content must be treated as untrusted data.
+
+Protect against:
+
+- Prompt injection.
+- Malicious documents.
+- Poisoned repositories.
+- Malicious web pages.
+- Fake research.
+- SEO spam.
+- Fabricated sources.
+- Hidden instructions.
+- Manipulated model downloads.
+
+Knowledge acquisition must never directly modify protected system instructions or execute arbitrary code.
+
+## Continuous Learning Schedule
+
+Implement configurable schedules for:
+
+- Fast updates.
+- Topic monitoring.
+- Research jobs.
+- Memory consolidation.
+- Reflection.
+- Skill evaluation.
+- Model evaluation.
+- Self-diagnostics.
+- Evolution proposals.
+
+Schedules must be configurable and adaptive.
+
+Do not implement an uncontrolled busy loop.
+
+Implement task prioritization, backpressure, concurrency limits, rate limits, deduplication, and resource-aware scheduling.
+
+---
+
+# 7. AUTONOMOUS AGENT RUNTIME
+
+Build an advanced agent execution engine.
+
+Agents must be capable of:
+
+- Understanding goals.
+- Planning.
+- Using tools.
+- Executing tasks.
+- Reading files.
+- Writing files.
+- Searching.
+- Browsing.
+- Analyzing code.
+- Running tests.
+- Executing authorized commands.
+- Creating reports.
+- Managing workflows.
+- Interacting with APIs.
+- Creating and using skills.
+- Learning from failures.
+- Resuming interrupted tasks.
+
+The system must support:
+
+- Persistent task state.
+- Durable execution.
+- Checkpointing.
+- Retry policies.
+- Exponential backoff.
+- Dead-letter queues.
+- Cancellation.
+- Timeout handling.
+- Task budgets.
+- Tool budgets.
+- Token budgets.
+- Execution budgets.
+- Rate limits.
+- Parallel tasks.
+- Dependency management.
+- Progress reporting.
+- Event streaming.
+- Recovery.
+
+Implement a reliable agent state machine.
+
+A task must not endlessly repeat failed actions.
+
+Add explicit loop detection and execution limits.
+
+## Tool System
+
+Create a standardized Neo Tool Registry.
+
+Each tool must define:
+
+- Unique ID.
+- Name.
+- Description.
+- Input schema.
+- Output schema.
+- Permissions.
+- Risk level.
+- Required scopes.
+- Timeout.
+- Resource limits.
+- Execution environment.
+- Audit requirements.
+
+Implement:
+
+- Tool discovery.
+- Tool registration.
+- Tool versioning.
+- Tool validation.
+- Tool execution.
+- Tool result verification.
+- Tool failure recovery.
+- Tool permissions.
+- Tool sandboxing.
+
+Support future MCP interoperability as an optional protocol adapter, but Neo's internal tools and runtime must not depend on an external agent framework.
+
+---
+
+# 8. TRUE SELF-IMPROVEMENT AND SELF-EVOLUTION
+
+This is one of the most important components.
+
+Neo must continuously analyze its own performance and identify ways to improve.
+
+However, continuous learning and uncontrolled production code mutation are not the same thing.
+
+Build a layered evolution system.
+
+## Layer A — Continuous Knowledge Evolution
+
+Automatically improve:
+
+- Memories.
+- Skills.
+- Knowledge.
+- Retrieval strategies.
+- Task templates.
+- Prompt configurations.
+- Tool descriptions.
+- User context.
+- Planning heuristics.
+
+These updates must be versioned and reversible.
+
+## Layer B — Cognitive Configuration Evolution
+
+Automatically evaluate and optimize:
+
+- Reasoning strategies.
+- Model selection.
+- Prompt configurations.
+- Context construction.
+- Retrieval parameters.
+- Planning methods.
+- Tool selection.
+- Execution strategies.
+- Evaluation strategies.
+
+Use controlled experiments and measurable improvements.
+
+## Layer C — Software Self-Evolution
+
+Neo must be able to:
+
+1. Diagnose software problems.
+2. Analyze its own code.
+3. Identify opportunities for improvement.
+4. Generate a proposed patch.
+5. Create an isolated Git branch.
+6. Create an isolated worktree.
+7. Install dependencies in a controlled environment.
+8. Execute tests.
+9. Execute static analysis.
+10. Execute security scans.
+11. Execute regression tests.
+12. Execute benchmarks.
+13. Compare against the baseline.
+14. Evaluate whether the patch improves the system.
+15. Generate a detailed report.
+16. Reject unsuccessful changes.
+17. Keep a reproducible rollback path.
+18. Promote approved changes through staged deployment.
+
+Never use hardcoded benchmark scores.
+
+All benchmark data must come from actual test execution.
+
+Never claim a performance improvement unless it has been measured.
+
+Implement a genuine Git-based evolution pipeline.
+
+Do not pretend that writing a JSON file constitutes a code upgrade.
+
+## Layer D — Model Adaptation
+
+Implement a future-ready training and adaptation pipeline supporting:
+
+- Dataset generation from validated experiences.
+- Data quality filtering.
+- Deduplication.
+- Privacy filtering.
+- Evaluation datasets.
+- Fine-tuning.
+- LoRA.
+- QLoRA.
+- Adapter versioning.
+- Training job management.
+- GPU resource management.
+- Checkpoint management.
+- Model evaluation.
+- Regression detection.
+- Model promotion.
+- Rollback.
+
+Training must be optional and resource-aware.
+
+Neo must not automatically train on private user data without explicit authorization and suitable privacy controls.
+
+## Evolution Safety
+
+Implement:
+
+- Immutable security boundaries.
+- Protected files.
+- Policy enforcement.
+- Patch review.
+- Automated test gates.
+- Security test gates.
+- Benchmark gates.
+- Canary deployments.
+- Rollback.
+- Versioned releases.
+- Audit logs.
+
+Low-risk knowledge and configuration changes may be automated.
+
+Security-sensitive changes, database migrations, permission changes, authentication changes, deployment infrastructure changes, and destructive operations must require stronger approval gates.
+
+The goal is autonomous evolution, not unrestricted code execution.
+
+---
+
+# 9. SECURITY ARCHITECTURE
+
+Perform a complete security redesign where necessary.
+
+## 9.1 API Security
+
+Implement:
+
+- Strong API-key generation.
+- Hash-based API-key storage.
+- Scoped permissions.
+- Workspace isolation.
+- Revocation.
+- Key rotation.
+- Authentication.
+- Authorization.
+- Rate limiting.
+- Abuse protection.
+- Request validation.
+- Payload limits.
+- Audit logging.
+- Secure error handling.
+- Security headers.
+- CORS policy.
+- CSRF protection where applicable.
+- Session security.
+- Persistent secrets.
+- Secure deployment defaults.
+
+Remove insecure preview modes that provide administrative privileges without authentication.
+
+Never expose admin credentials, API keys, internal secrets, stack traces, or sensitive telemetry.
+
+## 9.2 Tenant Isolation
+
+Tenant isolation must apply to:
+
+- Conversations.
+- Memories.
+- Embeddings.
+- Knowledge.
+- Skills where applicable.
+- Files.
+- Tasks.
+- Tools.
+- API endpoints.
+- Webhooks.
+- Logs.
+- Research data.
+
+Test cross-tenant access explicitly.
+
+## 9.3 Execution Security
+
+Do not trust `node:vm` as a security boundary for arbitrary generated code.
+
+Use a genuine isolation mechanism for untrusted code execution.
+
+Evaluate and implement an architecture based on:
+
+- Containers.
+- Non-root execution.
+- Resource quotas.
+- CPU limits.
+- Memory limits.
+- Filesystem restrictions.
+- Network restrictions.
+- Process restrictions.
+- Timeouts.
+- Temporary environments.
+- Destruction after execution.
+
+Where appropriate, use stronger isolation such as microVMs.
+
+Never allow generated code to access production secrets or unrestricted host filesystem access.
+
+## 9.4 SSRF and Web Research Security
+
+Implement DNS-aware SSRF protection.
+
+Validate:
+
+- URL scheme.
+- Hostname.
+- DNS resolution.
+- Resolved IP addresses.
+- Private addresses.
+- Loopback.
+- Link-local.
+- IPv4.
+- IPv6.
+- Redirect destinations.
+- Redirect chains.
+
+Prevent DNS rebinding and redirect-based bypasses.
+
+Do not allow research tools to access internal infrastructure, metadata endpoints, localhost, private networks, or sensitive services.
+
+---
+
+# 10. AUTONOMOUS RESEARCH AND WEB INTELLIGENCE
+
+Neo must have its own research system.
+
+Implement a modular research pipeline:
+
+1. Research question decomposition.
+2. Search query generation.
+3. Search execution.
+4. Source discovery.
+5. Source filtering.
+6. Source reliability scoring.
+7. Page retrieval.
+8. Document extraction.
+9. Fact extraction.
+10. Evidence analysis.
+11. Cross-source comparison.
+12. Contradiction detection.
+13. Synthesis.
+14. Citation generation.
+15. Confidence assessment.
+16. Memory storage.
+
+Implement multiple search adapters without making external AI APIs a dependency.
+
+Where a search API requires a key, make it optional and support fallback methods.
+
+Use a source registry and research history.
+
+Neo must be able to conduct multi-step research independently and return evidence-based reports with source links.
+
+---
+
+# 11. API PLATFORM — NEO MUST SERVE ALL FUTURE APPLICATIONS
+
+Build Neo as a standalone cognitive service that Neos and future products can connect to.
+
+Design a versioned API.
+
+Minimum API capabilities:
+
+## Core
+
+- `POST /api/v1/chat`
+- `POST /api/v1/chat/stream`
+- `POST /api/v1/tasks`
+- `GET /api/v1/tasks/:id`
+- `POST /api/v1/tasks/:id/cancel`
+- `GET /api/v1/tasks/:id/events`
+- `POST /api/v1/reason`
+- `POST /api/v1/plan`
+- `POST /api/v1/verify`
+
+## Memory
+
+- `POST /api/v1/memory`
+- `GET /api/v1/memory/search`
+- `GET /api/v1/memory/:id`
+- `PATCH /api/v1/memory/:id`
+- `DELETE /api/v1/memory/:id`
+
+## Knowledge
+
+- `POST /api/v1/research`
+- `GET /api/v1/research/:id`
+- `POST /api/v1/knowledge/ingest`
+- `GET /api/v1/knowledge/search`
+- `GET /api/v1/knowledge/sources`
+
+## Skills
+
+- `GET /api/v1/skills`
+- `POST /api/v1/skills`
+- `GET /api/v1/skills/:id`
+- `PATCH /api/v1/skills/:id`
+- `POST /api/v1/skills/:id/evaluate`
+
+## Tools
+
+- `GET /api/v1/tools`
+- `POST /api/v1/tools/:id/execute`
+
+## Models
+
+- `GET /api/v1/models`
+- `GET /api/v1/models/health`
+- `POST /api/v1/models/evaluate`
+- `POST /api/v1/models/install`
+- `POST /api/v1/models/activate`
+- `POST /api/v1/models/rollback`
+
+## Evolution
+
+- `GET /api/v1/evolution`
+- `POST /api/v1/evolution/diagnose`
+- `POST /api/v1/evolution/proposals`
+- `GET /api/v1/evolution/proposals/:id`
+- `POST /api/v1/evolution/proposals/:id/evaluate`
+- `POST /api/v1/evolution/proposals/:id/approve`
+- `POST /api/v1/evolution/proposals/:id/reject`
+- `POST /api/v1/evolution/proposals/:id/rollback`
+
+## System
+
+- `GET /api/v1/health`
+- `GET /api/v1/status`
+- `GET /api/v1/capabilities`
+- `GET /api/v1/metrics`
+- `GET /api/v1/openapi.json`
+
+Use appropriate authentication, authorization, validation, rate limiting, and tenant isolation for all endpoints.
+
+Do not expose privileged endpoints publicly.
+
+## API Standards
+
+Implement:
+
+- OpenAPI 3.1.
+- Structured errors.
+- Request IDs.
+- Correlation IDs.
+- Idempotency keys where appropriate.
+- SSE streaming.
+- Webhooks.
+- API versioning.
+- Pagination.
+- Rate-limit headers.
+- Consistent response schemas.
+- Health checks.
+- Audit events.
+
+---
+
+# 12. OFFICIAL NEO SDK
+
+Create a stable SDK for connecting applications to Neo.
+
+Create or upgrade:
+
+`packages/neo-ai-sdk`
+
+Support:
+
+- TypeScript.
+- JavaScript.
+- Browser environments where appropriate.
+- Node.js.
+- API authentication.
+- Streaming.
+- Task creation.
+- Task polling.
+- Task events.
+- Memory access.
+- Research.
+- Tool execution.
+- Model information.
+- Error handling.
+- Retries.
+- Timeouts.
+- Cancellation.
+
+Example target usage:
+
+```typescript
+import { NeoClient } from '@neo/ai-sdk';
+
+const neo = new NeoClient({
+  baseUrl: process.env.NEO_URL,
+  apiKey: process.env.NEO_API_KEY
+});
+
+const result = await neo.chat({
+  message: 'Analyze this business data',
+  workspaceId: 'workspace_123'
+});
+
+const task = await neo.createTask({
+  goal: 'Research and evaluate a new inventory forecasting method',
+  autonomy: 'high'
+});
+
+for await (const event of neo.taskEvents(task.id)) {
+  console.log(event);
+}
+```
+
+The SDK must be functional, documented, typed, tested, and versioned.
+
+Prepare Neos integration without tightly coupling Neo's cognitive core to Neos-specific business logic.
+
+Neo must be reusable by future applications.
+
+---
+
+# 13. MULTIMODAL CAPABILITIES
+
+Prepare the architecture for:
+
+- Text.
+- Images.
+- PDF documents.
+- Audio.
+- Speech-to-text.
+- Text-to-speech.
+- Video.
+- Structured data.
+- Code.
+- Documents.
+- Web content.
+
+Multimodal capabilities must use locally hosted models or local processing engines whenever feasible.
+
+Do not falsely advertise unsupported modalities.
+
+Implement a capability registry so applications can discover exactly what Neo can currently process.
+
+---
+
+# 14. KNOWLEDGE GRAPH
+
+Add a persistent knowledge graph.
+
+Store relationships between:
+
+- People.
+- Organizations.
+- Concepts.
+- Projects.
+- Events.
+- Documents.
+- Facts.
+- Tasks.
+- Skills.
+- Sources.
+- Products.
+- Systems.
+
+Support:
+
+- Entity resolution.
+- Relationship extraction.
+- Temporal relationships.
+- Provenance.
+- Confidence.
+- Contradiction tracking.
+- Graph traversal.
+- Semantic search across graph entities.
+
+Use an appropriate graph-capable database or implement a practical graph layer on PostgreSQL if adding a separate database would unnecessarily complicate deployment.
+
+Do not introduce unnecessary infrastructure.
+
+---
+
+# 15. OBSERVABILITY AND PERFORMANCE
+
+Build comprehensive observability.
+
+Track:
+
+- Inference latency.
+- Tokens per second.
+- Queue latency.
+- Model health.
+- GPU utilization.
+- VRAM utilization.
+- CPU.
+- RAM.
+- Storage.
+- Task completion rate.
+- Task failure rate.
+- Tool success rate.
+- Research success rate.
+- Memory retrieval quality.
+- Hallucination indicators.
+- Benchmark performance.
+- Model quality.
+- Cost of compute.
+- Resource consumption.
+- Evolution outcomes.
+
+Implement structured logs, traces, metrics, correlation IDs, and task-level telemetry.
+
+Never log secrets or sensitive private data.
+
+Provide an operational dashboard that shows Neo's actual capabilities and health, not simulated data.
+
+---
+
+# 16. CONTINUOUS AUTONOMY
+
+Neo must continue working independently when no user is interacting with it.
+
+Create a configurable autonomous scheduler that manages:
+
+- Knowledge updates.
+- Research tasks.
+- Memory consolidation.
+- Self-reflection.
+- Skill evaluation.
+- Model evaluation.
+- System diagnostics.
+- Performance optimization.
+- Evolution proposals.
+- Maintenance tasks.
+- Scheduled user tasks.
+
+Implement a task priority system.
+
+Support:
+
+- User tasks.
+- Scheduled tasks.
+- Internal improvement tasks.
+- Urgent maintenance tasks.
+
+The scheduler must consider:
+
+- Resource availability.
+- Task importance.
+- Deadline.
+- Priority.
+- Current workload.
+- Safety.
+- User permissions.
+- Compute budget.
+
+Do not let internal autonomous tasks starve user tasks.
+
+Do not run uncontrolled background processes.
+
+---
+
+# 17. COMPUTE AND DEPLOYMENT ARCHITECTURE
+
+Create production deployment profiles.
+
+## Development
+
+- Local SQLite.
+- Local model runtime.
+- CPU fallback.
+- Optional local GPU.
+- Docker Compose.
+- Simple setup.
+
+## Single-Node GPU
+
+- PostgreSQL.
+- pgvector.
+- Redis.
+- Local model server.
+- Worker processes.
+- GPU monitoring.
+- Persistent storage.
+- Automatic model configuration.
+
+## Multi-GPU
+
+Support:
+
+- Tensor parallelism.
+- Pipeline parallelism where appropriate.
+- Model sharding.
+- Shared task queue.
+- Shared memory and storage.
+- Load balancing.
+- Resource-aware model routing.
+
+## Distributed Compute
+
+Prepare architecture for:
+
+- Multiple inference nodes.
+- Multiple workers.
+- Distributed model serving.
+- Task scheduling.
+- Node discovery.
+- Health monitoring.
+- Failover.
+- Scaling.
+
+Do not require a distributed cluster for initial deployment.
+
+The system must automatically degrade gracefully when GPU resources are unavailable.
+
+Create:
+
+- Dockerfiles.
+- Docker Compose profiles.
+- Production deployment configuration.
+- Environment documentation.
+- Health checks.
+- Persistent volumes.
+- Backup procedures.
+- Recovery procedures.
+
+Never use default production passwords.
+
+---
+
+# 18. DATABASE AND MIGRATIONS
+
+Review the existing database and redesign it where required.
+
+Implement schema for:
+
+- Users.
+- Workspaces.
+- API keys.
+- Permissions.
+- Conversations.
+- Messages.
+- Tasks.
+- Task steps.
+- Task events.
+- Memories.
+- Knowledge.
+- Sources.
+- Entities.
+- Relationships.
+- Skills.
+- Tools.
+- Tool executions.
+- Models.
+- Model deployments.
+- Model evaluations.
+- Benchmarks.
+- Evolution proposals.
+- Evolution experiments.
+- Training jobs.
+- Audit logs.
+- Telemetry.
+- Scheduled jobs.
+- System configuration.
+
+All migrations must be versioned.
+
+Do not destroy existing data.
+
+Create migrations and test migration compatibility.
+
+---
+
+# 19. TESTING AND VALIDATION
+
+Implement comprehensive automated testing.
+
+## Unit Tests
+
+Test all core logic.
+
+## Integration Tests
+
+Test:
+
+- Database.
+- Memory.
+- Retrieval.
+- Inference runtime.
+- Tool execution.
+- API authentication.
+- Tenant isolation.
+- Background jobs.
+- Scheduler.
+- Research.
+- Evolution.
+
+## Security Tests
+
+Test:
+
+- Authentication bypass.
+- Authorization bypass.
+- Cross-tenant leakage.
+- SSRF.
+- DNS rebinding.
+- Redirect bypass.
+- Prompt injection.
+- Malicious tool inputs.
+- Sandbox escape attempts.
+- Path traversal.
+- Secret exposure.
+- Rate-limit bypass.
+- Privilege escalation.
+
+## Agent Tests
+
+Test:
+
+- Planning.
+- Task decomposition.
+- Tool selection.
+- Multi-step execution.
+- Failure recovery.
+- Loop detection.
+- Task persistence.
+- Checkpoint recovery.
+- Cancellation.
+- Long-running task resumption.
+- Independent verification.
+
+## Intelligence Evaluation
+
+Create a reproducible benchmark suite containing:
+
+- General reasoning.
+- Coding.
+- Mathematics.
+- Planning.
+- Research.
+- Tool use.
+- Memory retrieval.
+- Multilingual reasoning.
+- Persian language.
+- Business analysis.
+- Fact verification.
+- Long-horizon tasks.
+
+Use real test results.
+
+Store evaluation datasets and benchmark versions.
+
+Do not hardcode benchmark scores.
+
+Do not pass tests by weakening assertions or replacing meaningful tests with trivial checks.
+
+---
+
+# 20. ADMINISTRATIVE INTERFACE
+
+Upgrade the Neo console to provide actual operational control.
+
+Create functional interfaces for:
+
+- AI conversations.
+- Autonomous tasks.
+- Task execution.
+- Task history.
+- Task progress.
+- Memory.
+- Knowledge.
+- Research.
+- Skills.
+- Tools.
+- Model management.
+- Model installation.
+- Model selection.
+- Benchmarking.
+- GPU monitoring.
+- System health.
+- Autonomous scheduler.
+- Self-evolution.
+- Patch proposals.
+- Test reports.
+- Rollbacks.
+- API keys.
+- Workspaces.
+- Security.
+- Audit logs.
+- Configuration.
+
+Do not use fake data.
+
+All dashboard values must come from the actual system.
+
+Make the UI responsive, clear, and operationally useful.
+
+---
+
+# 21. IMPLEMENTATION RULES
+
+Follow these rules throughout the project.
+
+1. Do not merely provide recommendations.
+2. Do not stop after creating an architecture document.
+3. Do not create fake implementations.
+4. Do not create simulated benchmarks.
+5. Do not leave core features as TODOs.
+6. Do not make the system dependent on external AI inference APIs.
+7. Do not use placeholder responses to simulate intelligence.
+8. Do not remove working functionality without a valid replacement.
+9. Do not break the existing API unnecessarily.
+10. Maintain backward compatibility where practical.
+11. Use TypeScript with strict typing.
+12. Validate all untrusted input.
+13. Use secure defaults.
+14. Avoid unnecessary dependencies.
+15. Use modular architecture.
+16. Keep cognitive logic independent from web framework logic.
+17. Keep the inference layer independent from the cognitive engine.
+18. Keep application integrations independent from Neo's internal intelligence.
+19. Use real persistence.
+20. Use actual test execution.
+21. Use actual benchmark execution.
+22. Document all new environment variables.
+23. Document deployment.
+24. Document model installation.
+25. Document GPU requirements.
+26. Document API usage.
+27. Document SDK usage.
+28. Document security boundaries.
+29. Document autonomous behavior.
+30. Document limitations honestly.
+
+When a feature is too large to finish completely, implement its production-ready foundation and clearly identify the exact remaining work. Never pretend an unfinished feature is complete.
+
+---
+
+# 22. REQUIRED IMPLEMENTATION WORKFLOW
+
+Follow this workflow.
+
+### Phase 1 — Repository Analysis
+
+Complete the repository audit.
+
+Identify all existing files, functionality, problems, and dependencies.
+
+### Phase 2 — Architecture
+
+Create the actual implementation architecture.
+
+Write concise technical documentation describing the final architecture.
+
+### Phase 3 — Core Infrastructure
+
+Implement:
+
+- Inference runtime.
+- Model registry.
+- Model management.
+- Cognitive orchestrator.
+- Task runtime.
+- Persistent state.
+- Memory.
+- Retrieval.
+- Knowledge engine.
+- Tool registry.
+
+### Phase 4 — Autonomy
+
+Implement:
+
+- Planner.
+- Agent loop.
+- Reflection.
+- Verification.
+- Failure recovery.
+- Continuous scheduler.
+- Autonomous tasks.
+
+### Phase 5 — Evolution
+
+Implement:
+
+- Diagnostics.
+- Evaluation.
+- Evolution proposals.
+- Git branches.
+- Worktrees.
+- Isolated testing.
+- Real benchmarks.
+- Promotion.
+- Rollback.
+
+### Phase 6 — API and SDK
+
+Implement the public API and official SDK.
+
+### Phase 7 — Security
+
+Perform a full security audit and implement the required fixes.
+
+### Phase 8 — UI
+
+Implement the operational console.
+
+### Phase 9 — Testing
+
+Run:
+
+- Unit tests.
+- Integration tests.
+- Type checks.
+- Lint.
+- Build.
+- Security tests.
+- Benchmark suite.
+
+Fix all actionable failures.
+
+### Phase 10 — Deployment
+
+Prepare production Docker configuration and deployment documentation.
+
+---
+
+# 23. ACCEPTANCE CRITERIA
+
+The implementation is not complete until the following are verified:
+
+- Neo can start without any external AI API key.
+- Neo can run a self-hosted model.
+- The inference runtime is replaceable.
+- Models can be registered and evaluated.
+- Model selection is measurable and configurable.
+- Neo can produce real generative responses using its local inference engine.
+- Neo has real semantic embeddings.
+- Memory retrieval is functional.
+- Memory is persistent.
+- Tasks are persistent.
+- Tasks survive process restarts.
+- The agent can plan and execute multi-step tasks.
+- The agent can use registered tools.
+- The agent can recover from errors.
+- The agent can detect loops.
+- The agent can conduct research.
+- Research sources are recorded.
+- Knowledge can be updated continuously.
+- Memory consolidation works.
+- Skills can be learned and evaluated.
+- The system can diagnose itself.
+- Evolution proposals contain actual patches.
+- Patches are evaluated using real tests.
+- Benchmark results are generated by real executions.
+- Failed changes cannot be promoted.
+- Rollback is functional.
+- API authentication works.
+- Tenant isolation is tested.
+- Security controls work.
+- SDK functions.
+- OpenAPI is valid.
+- Docker deployment works.
+- The dashboard displays actual system state.
+- Existing useful functionality remains intact.
+- All critical tests pass.
+- Build succeeds.
+- No fabricated metrics exist.
+- No critical security issue remains unaddressed.
+
+---
+
+# 24. FINAL DELIVERABLE
+
+After completing implementation, provide a detailed final report containing:
+
+1. Repository audit findings.
+2. Original architecture weaknesses.
+3. New architecture.
+4. Files created.
+5. Files modified.
+6. Dependencies added or removed.
+7. Implemented features.
+8. Features that are fully operational.
+9. Features that require GPU hardware.
+10. Features that require optional infrastructure.
+11. Features that remain incomplete.
+12. Security improvements.
+13. Database changes.
+14. API changes.
+15. SDK changes.
+16. Deployment instructions.
+17. Environment variables.
+18. Test results.
+19. Build results.
+20. Benchmark results.
+21. Known limitations.
+22. Recommended next development stage.
+
+Provide exact commands to run Neo locally and in production.
+
+Do not report a test as passing unless you actually executed it.
+
+Do not report an implementation as complete unless you verified it.
+
+---
+
+# THE ULTIMATE OBJECTIVE
+
+Build Neo into a genuinely independent, powerful, persistent, autonomous cognitive system that can:
+
+- Think.
+- Reason.
+- Plan.
+- Research.
+- Learn.
+- Remember.
+- Understand.
+- Use tools.
+- Execute tasks.
+- Analyze its own failures.
+- Improve its capabilities.
+- Evaluate its own improvements.
+- Safely evolve its software.
+- Manage its own models.
+- Maintain its own knowledge.
+- Operate continuously.
+- Recover from interruptions.
+- Serve Neos.
+- Serve future applications.
+- Expose its capabilities through a stable API.
+
+Neo must not be a simple AI chatbot.
+
+**Neo must become an independently operated, continuously evolving cognitive engine.**
+
+Start by auditing the complete repository. Then immediately proceed with implementation. Do not stop at the audit or architecture phase.

@@ -6,7 +6,7 @@ import type { TenantRecord } from '../db/schema.ts';
 import { hashApiKey, hashPasscode, verifyPasscode } from './crypto.ts';
 
 export interface AuthenticatedContext {
-  actorType: 'api_key' | 'admin' | 'preview_unclaimed';
+  actorType: 'api_key' | 'admin';
   actorLabel: string;
   tenant: TenantRecord;
   scopes: string[];
@@ -23,17 +23,21 @@ declare global {
 // In-memory sliding-window rate limiter per key/endpoint
 const rateBuckets = new Map<string, number[]>();
 
-export function checkRateLimit(bucketKey: string, maxRpm: number): { allowed: boolean; remaining: number; resetMs: number } {
+export function checkRateLimit(bucketKey: string, maxRpm: number): { allowed: boolean; limit: number; remaining: number; resetMs: number } {
   const now = Date.now();
   const windowStart = now - 60_000;
   const timestamps = (rateBuckets.get(bucketKey) || []).filter((t) => t > windowStart);
   if (timestamps.length >= maxRpm) {
     const oldest = timestamps[0] || now;
-    return { allowed: false, remaining: 0, resetMs: Math.max(1000, oldest + 60_000 - now) };
+    return { allowed: false, limit: maxRpm, remaining: 0, resetMs: Math.max(1000, oldest + 60_000 - now) };
   }
   timestamps.push(now);
   rateBuckets.set(bucketKey, timestamps);
-  return { allowed: true, remaining: maxRpm - timestamps.length, resetMs: 60_000 };
+  return { allowed: true, limit: maxRpm, remaining: maxRpm - timestamps.length, resetMs: 60_000 };
+}
+
+export function clearRateLimitsForTests(): void {
+  rateBuckets.clear();
 }
 
 export function issueAdminToken(): string {
@@ -72,6 +76,7 @@ export async function getAdminLockState(): Promise<{ locked: boolean; source: 'e
 }
 
 export async function verifyAdminCredential(passcode: string): Promise<boolean> {
+  if (!passcode) return false;
   if (env.adminPasscode) {
     const a = Buffer.from(passcode, 'utf8');
     const b = Buffer.from(env.adminPasscode, 'utf8');
@@ -88,8 +93,8 @@ export async function claimInitialAdminPasscode(passcode: string): Promise<{ ok:
   if (state.locked) {
     return { ok: false, error: 'Admin access is already configured and locked.' };
   }
-  if (!passcode || passcode.length < 6) {
-    return { ok: false, error: 'Passcode must be at least 6 characters.' };
+  if (!passcode || passcode.length < 8) {
+    return { ok: false, error: 'Passcode must be at least 8 characters.' };
   }
   const db = await getDb();
   await db.setAdminConfig('admin_passcode_hash', hashPasscode(passcode));
@@ -106,33 +111,33 @@ function extractBearerOrKey(req: Request): string | null {
   return null;
 }
 
+/**
+ * Strict Admin Console Auth — never grants unauthenticated access (even when unclaimed).
+ * Callers must first claim/login via /api/admin/auth/claim or /api/admin/auth/login to receive a signed neo_adm_ token.
+ */
 export async function requireAdminConsoleAuth(req: Request, res: Response, next: NextFunction) {
   const lockState = await getAdminLockState();
   const token = extractBearerOrKey(req);
 
-  if (!lockState.locked) {
-    // Preview mode before admin passcode is claimed or env var is set
-    const db = await getDb();
-    const tenants = await db.listTenants();
-    req.neoAuth = {
-      actorType: 'preview_unclaimed',
-      actorLabel: 'admin-preview',
-      tenant: tenants[0],
-      scopes: ['read', 'write', 'forge', 'admin'],
-    };
-    return next();
-  }
-
   if (!token || !verifyAdminToken(token)) {
-    return res.status(401).json({ error: 'Admin authentication required', authRequired: true });
+    return res.status(401).json({
+      error: lockState.locked
+        ? 'Admin authentication required'
+        : 'Initial admin setup required. Claim admin passcode first.',
+      authRequired: true,
+      lockState,
+    });
   }
 
   const db = await getDb();
   const tenants = await db.listTenants();
+  const requestedTenant = req.header('x-neo-workspace');
+  const activeTenant = (requestedTenant && (await db.getTenantById(requestedTenant))) || tenants[0];
+
   req.neoAuth = {
     actorType: 'admin',
     actorLabel: 'admin-session',
-    tenant: tenants[0],
+    tenant: activeTenant,
     scopes: ['read', 'write', 'forge', 'admin'],
   };
   return next();
@@ -143,23 +148,25 @@ export function requireApiGatewayAuth(requiredScope = 'read') {
     const rawCredential = extractBearerOrKey(req);
     const db = await getDb();
 
-    // 1. Check scoped neos_live_ API Key
+    // 1. Scoped neos_live_ API Key (with strict tenant binding & rate limits)
     if (rawCredential && rawCredential.startsWith('neos_live_')) {
       const keyHash = hashApiKey(rawCredential);
       const apiKey = await db.getApiKeyByHash(keyHash);
       if (!apiKey || apiKey.revoked_at) {
-        return res.status(401).json({ error: 'Invalid or revoked Neos API key' });
+        return res.status(401).json({ error: 'Invalid or revoked Neo API key' });
       }
       if (!apiKey.scopes.includes(requiredScope) && !apiKey.scopes.includes('admin')) {
         return res.status(403).json({ error: `API key missing required scope: ${requiredScope}` });
       }
       const tenant = await db.getTenantById(apiKey.tenant_id);
       if (!tenant) {
-        return res.status(401).json({ error: 'Tenant not found for API key' });
+        return res.status(401).json({ error: 'Workspace/tenant not found for API key' });
       }
 
       const limit = checkRateLimit(`key:${apiKey.id}`, tenant.rate_limit_rpm);
+      res.setHeader('X-RateLimit-Limit', String(limit.limit));
       res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
+      res.setHeader('X-RateLimit-Reset', String(Math.ceil(limit.resetMs / 1000)));
       if (!limit.allowed) {
         return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
       }
@@ -174,31 +181,30 @@ export function requireApiGatewayAuth(requiredScope = 'read') {
       return next();
     }
 
-    // 2. Check Admin session Bearer token (or unclaimed console workbench request)
+    // 2. Signed Admin session Bearer token (optional workspace scoping via X-Neo-Workspace)
     if (rawCredential && verifyAdminToken(rawCredential)) {
       const tenants = await db.listTenants();
+      const requestedTenant = req.header('x-neo-workspace');
+      const activeTenant = (requestedTenant && (await db.getTenantById(requestedTenant))) || tenants[0];
+      const limit = checkRateLimit(`admin:${activeTenant.id}`, activeTenant.rate_limit_rpm);
+      res.setHeader('X-RateLimit-Limit', String(limit.limit));
+      res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
+      res.setHeader('X-RateLimit-Reset', String(Math.ceil(limit.resetMs / 1000)));
+      if (!limit.allowed) {
+        return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
+      }
       req.neoAuth = {
         actorType: 'admin',
         actorLabel: 'admin-session',
-        tenant: tenants[0],
+        tenant: activeTenant,
         scopes: ['read', 'write', 'forge', 'admin'],
       };
       return next();
     }
 
-    const lockState = await getAdminLockState();
-    const isConsoleOrigin = req.header('x-neo-console') === '1';
-    if (!lockState.locked && isConsoleOrigin) {
-      const tenants = await db.listTenants();
-      req.neoAuth = {
-        actorType: 'preview_unclaimed',
-        actorLabel: 'console-workbench',
-        tenant: tenants[0],
-        scopes: ['read', 'write', 'forge', 'admin'],
-      };
-      return next();
-    }
-
-    return res.status(401).json({ error: 'Missing or invalid Authorization: Bearer neos_live_... API key' });
+    return res.status(401).json({
+      error: 'Authentication required. Provide Authorization: Bearer neos_live_... or signed admin session token.',
+      authRequired: true,
+    });
   };
 }

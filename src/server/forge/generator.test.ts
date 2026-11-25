@@ -1,7 +1,7 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildOpenApiOperation, buildZodSchemaFromJsonSchema } from './generator';
-import { estimateCostUsd } from '../llm/router';
+import test from 'node:test';
+import { neoInferenceEngine } from '../inference/registry.ts';
+import { buildOpenApiOperation, buildZodSchemaFromJsonSchema } from './generator.ts';
 
 test('dynamic Zod schema builder validates required fields and types', () => {
   const zodSchema = buildZodSchemaFromJsonSchema({
@@ -32,7 +32,13 @@ test('OpenAPI operation generator emits valid custom path and security scheme', 
   assert.equal(op.method, 'POST');
 });
 
-test('LLM cost estimator calculates USD accurately', () => {
-  const cost = estimateCostUsd('gemini-4-hydrogen', 1_000_000, 1_000_000);
-  assert.equal(cost, 0.5);
+test('Neo sovereign inference generates valid API forge JSON using embedded runtime with zero external cost', async () => {
+  const { data, response } = await neoInferenceEngine.inferJson<{ slug: string; handlerCode: string }>({
+    prompt: 'Requirement: Compute VAT invoice total from amount and taxRate',
+    taskType: 'api_forge_synthesis',
+    preferredRuntime: 'embedded',
+  });
+  assert.equal(response.runtime, 'embedded');
+  assert.ok(data.slug.length > 0);
+  assert.ok(data.handlerCode.includes('function handle'));
 });

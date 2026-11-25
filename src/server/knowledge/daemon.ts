@@ -1,23 +1,11 @@
 import { env } from '../config/env.ts';
 import { getDb } from '../db/adapter.ts';
 import { chunkText } from '../db/vector.ts';
-import { routeJsonLlmCall } from '../llm/router.ts';
 import { distillTextLocally } from '../neo/sovereignEngine.ts';
 import { jobQueue } from '../queue/jobQueue.ts';
 import { discoverWebKnowledge, type DiscoveredSource } from '../search/webSearch.ts';
+import { knowledgeGraph } from './graph.ts';
 import { storeMemory } from './memory.ts';
-
-interface DistilledKnowledge {
-  title: string;
-  distilledSummary: string;
-  structuredFacts: Record<string, unknown>;
-  skillUpdate?: {
-    slug: string;
-    title: string;
-    domain: string;
-    markdownGuide: string;
-  };
-}
 
 export interface CrawlResult {
   topic: string;
@@ -27,35 +15,34 @@ export interface CrawlResult {
   sources: Array<{ title: string; url: string; provider: string; reliabilityScore: number }>;
 }
 
-async function distillSource(topic: string, source: DiscoveredSource): Promise<DistilledKnowledge> {
-  if (env.neoLocalOnly) {
-    return distillTextLocally(topic, source.title, source.content);
-  }
-  try {
-    const { data } = await routeJsonLlmCall<DistilledKnowledge>({
-      taskType: 'knowledge_distillation',
-      thinkingLevel: 'LOW',
-      systemInstruction:
-        'You are Neo KnowledgeDistiller. Given raw web/repo/paper content, extract verified technical or business intelligence. Return strict JSON: { "title": string, "distilledSummary": string, "structuredFacts": object, "skillUpdate"?: { "slug": string, "title": string, "domain": string, "markdownGuide": string } }.',
-      prompt: `Topic: ${topic}\nSource URL: ${source.url}\nTitle: ${source.title}\nContent:\n${source.content.slice(0, 4000)}`,
-    });
-    return data;
-  } catch {
-    return distillTextLocally(topic, source.title, source.content);
-  }
+async function distillSource(topic: string, source: DiscoveredSource) {
+  return distillTextLocally(topic, source.title, source.content);
 }
 
-export async function runKnowledgeCrawlForTopic(topic: string, streamId?: string): Promise<CrawlResult> {
+export async function runKnowledgeCrawlForTopic(topic: string, streamId?: string, tenantId = 'global'): Promise<CrawlResult> {
   const db = await getDb();
   const discovered = await discoverWebKnowledge(topic);
-  const existingMemories = await db.listMemories({ memoryType: 'semantic', limit: 200 });
+  const existingMemories = await db.listMemories({ memoryType: 'semantic', tenantId, limit: 200 });
   const existingUrls = new Set(existingMemories.map((m) => m.source_url).filter(Boolean));
 
   let memoriesStored = 0;
   let skillsUpdated = 0;
 
   for (const src of discovered) {
-    // Deduplicate identical source URLs already ingested recently
+    await db.upsertKnowledgeSource({
+      tenant_id: tenantId,
+      url: src.url,
+      title: src.title,
+      source_type: src.sourceType,
+      author: src.author,
+      published_at: src.publishedAt || null,
+      last_verified_at: new Date().toISOString(),
+      reliability_score: src.reliabilityScore,
+      quality_breakdown: src.qualityBreakdown,
+      content_hash: src.contentHash,
+      injection_flagged: src.injectionFlagged,
+    });
+
     if (existingUrls.has(src.url) && existingMemories.some((m) => m.source_url === src.url && m.topic === topic)) {
       continue;
     }
@@ -65,7 +52,7 @@ export async function runKnowledgeCrawlForTopic(topic: string, streamId?: string
 
     for (const [idx, chunk] of chunks.slice(0, 2).entries()) {
       await storeMemory({
-        tenantId: 'global',
+        tenantId,
         memoryType: 'semantic',
         topic,
         title: chunks.length > 1 ? `${distilled.title} (part ${idx + 1})` : distilled.title,
@@ -74,6 +61,7 @@ export async function runKnowledgeCrawlForTopic(topic: string, streamId?: string
           ...distilled.structuredFacts,
           provider: src.provider,
           publishedAt: src.publishedAt || null,
+          injectionFlagged: src.injectionFlagged,
         },
         sourceUrl: src.url,
         reliabilityScore: src.reliabilityScore,
@@ -82,18 +70,7 @@ export async function runKnowledgeCrawlForTopic(topic: string, streamId?: string
       memoriesStored++;
     }
 
-    if (distilled.skillUpdate?.slug && distilled.skillUpdate?.markdownGuide) {
-      await db.upsertSkill({
-        slug: distilled.skillUpdate.slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-'),
-        title: distilled.skillUpdate.title,
-        domain: distilled.skillUpdate.domain || 'general',
-        version: 1,
-        format: 'markdown',
-        content: distilled.skillUpdate.markdownGuide,
-        metadata: { sourceUrl: src.url, topic, reliability: src.reliabilityScore },
-      });
-      skillsUpdated++;
-    }
+    await knowledgeGraph.extractFromText(tenantId, `${distilled.title} ${distilled.distilledSummary}`, src.url);
   }
 
   if (streamId) {
@@ -157,7 +134,7 @@ class KnowledgeDaemonService {
     }
   }
 
-  async triggerManualLearn(topic: string, streamId?: string): Promise<CrawlResult> {
+  async triggerManualLearn(topic: string, streamId?: string, tenantId = 'global'): Promise<CrawlResult> {
     const db = await getDb();
     let targetStreamId = streamId;
     if (!targetStreamId) {
@@ -170,7 +147,7 @@ class KnowledgeDaemonService {
         targetStreamId = created.id;
       }
     }
-    return runKnowledgeCrawlForTopic(topic, targetStreamId);
+    return runKnowledgeCrawlForTopic(topic, targetStreamId, tenantId);
   }
 
   stop(): void {

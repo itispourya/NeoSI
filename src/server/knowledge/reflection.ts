@@ -1,10 +1,10 @@
-import { routeJsonLlmCall } from '../llm/router.ts';
+import { neoInferenceEngine } from '../inference/registry.ts';
 import { jobQueue } from '../queue/jobQueue.ts';
 import { storeMemory } from './memory.ts';
 
 export interface ReflectionInput {
   tenantId: string;
-  taskType: 'engineering' | 'business_analysis' | 'api_forge' | 'chat';
+  taskType: 'engineering' | 'business_analysis' | 'api_forge' | 'chat' | 'autonomous_task' | 'research';
   goal: string;
   outcome: 'success' | 'failure' | 'partial';
   errorTrace?: string;
@@ -24,14 +24,15 @@ export async function runReflectionTask(input: ReflectionInput): Promise<Record<
   let distilled: DistilledReflection;
 
   try {
-    const { data } = await routeJsonLlmCall<DistilledReflection>({
+    const { data } = await neoInferenceEngine.inferJson<DistilledReflection>({
       tenantId: input.tenantId,
+      role: 'fast',
       taskType: 'reflection_worker',
-      thinkingLevel: 'LOW',
       systemInstruction:
         'You are Neo ReflectionWorker. Extract a concise episodic log and an actionable procedural rule so the system avoids repeating mistakes and compounds wins. Return strict JSON with keys: episodicTitle, episodicSummary, rootCause, proceduralRule, reusablePatternName.',
       prompt: JSON.stringify(input),
     });
+    if (!data.episodicTitle || !data.proceduralRule) throw new Error('Incomplete reflection JSON');
     distilled = data;
   } catch {
     distilled = {
@@ -41,7 +42,7 @@ export async function runReflectionTask(input: ReflectionInput): Promise<Record<
       proceduralRule:
         input.outcome === 'success'
           ? `Validated workflow for ${input.taskType}: ${input.goal.slice(0, 120)}`
-          : `Avoid failure in ${input.taskType}: verify inputs & sandbox assertions before finalizing (${input.errorTrace?.slice(0, 120) || 'runtime error'})`,
+          : `Avoid failure in ${input.taskType}: verify inputs & assertions before finalizing (${input.errorTrace?.slice(0, 120) || 'runtime error'})`,
       reusablePatternName: `${input.taskType}-guardrail`,
     };
   }
@@ -58,10 +59,11 @@ export async function runReflectionTask(input: ReflectionInput): Promise<Record<
       rootCause: distilled.rootCause,
     },
     reliabilityScore: input.outcome === 'success' ? 0.92 : 0.88,
+    importanceScore: input.outcome === 'failure' ? 0.88 : 0.72,
   });
 
   const procedural = await storeMemory({
-    tenantId: 'global',
+    tenantId: input.tenantId,
     memoryType: 'procedural',
     topic: input.taskType,
     title: distilled.reusablePatternName,
@@ -71,6 +73,7 @@ export async function runReflectionTask(input: ReflectionInput): Promise<Record<
       rootCause: distilled.rootCause,
     },
     reliabilityScore: 0.94,
+    importanceScore: 0.85,
   });
 
   return {

@@ -1,100 +1,44 @@
-# Neo — Autonomous Cognitive Brain, Self-Upgrading Agent & Dynamic API Forge
+# Neo — Autonomous Sovereign Cognitive Engine & API Forge
 
-**Neo** is an independent, standalone, production-grade AI engine, senior autonomous software engineer, deep business intelligence analyst, and dynamic API generator built to serve as the sovereign cognitive brain for **Neos** (Business Operations OS) and third-party client workspaces.
+**Neo** is an independent, self-hosted, continuously learning autonomous cognitive operating system, software engineering agent, multi-module business intelligence engine for **Neos**, and dynamic API Forge.
 
----
+Neo operates with **zero dependencies on external commercial LLM/AI APIs** (`@google/genai`, OpenAI, Anthropic, or OpenRouter cloud APIs are absent). It boots and executes locally via its CPU-native `neo-embedded-core-v1` + `neo-embed-local-v2` engines and natively integrates self-hosted open-weight model runtimes (**vLLM**, **Ollama**, **TensorRT-LLM**, and **HuggingFace Transformers**).
 
 ## Core Architecture
+- **Independent Inference & Model Lifecycle (`src/server/inference/`)**: Hardware profiler (CPU/RAM/Disk/GPU VRAM), pluggable open-weight `InferenceEngine`, `NeoModelRegistry` (hardware & open-license compatibility, SHA-256 verification, activation & rollback), and a real 12-category `NEO_BENCHMARK_CASES` suite.
+- **13-Stage Cognitive Core (`src/server/cognitive/`)**: Intent & complexity classification, dependency-aware DAG `TaskPlanner`, 11 Zod-validated built-in tools + MCP JSON-RPC (`src/server/tools/registry.ts`), and an independent `CriticEngine` verifying grounding, arithmetic, and safety.
+- **Durable Agent Runtime (`src/server/agent/runtime.ts`)**: Persisted state machine (`pending -> planning -> running -> completed | failed | cancelled`) with step checkpointing, loop-signature guard, cancellation, SSE `/api/v1/tasks/:id/events`, and boot-time recovery of interrupted tasks.
+- **7-Layer Hybrid Memory & Knowledge Graph (`src/server/knowledge/`)**: `working`, `episodic`, `semantic`, `procedural`, `personal`, `organizational`, and `temporal` memory (with `valid_from`, `valid_to`, `superseded_by`), BM25 + multilingual 768-d cosine RRF retrieval, periodic `consolidation.ts`, entity/relationship graph with contradiction tracking, and a 16-stage `runAutonomousResearch` pipeline.
+- **4-Layer Safe Self-Evolution (`src/server/evolution/pipeline.ts`)**: Skill evaluation (Layer A), A/B cognitive config experiments (Layer B), isolated Git branch + subprocess unit test + measured before/after benchmark gating with `PROTECTED_CORE_PATHS` guardrails (Layer C), and privacy-filtered SFT/LoRA JSONL dataset building (Layer D).
+- **Security & Isolated Execution (`src/server/security/`, `src/server/sandbox/`)**: Fail-closed scrypt admin auth, scoped `neos_live_*` API keys with rotate/revoke, strict tenant isolation across every table, DNS-aware SSRF protection with manual redirect chain checks, `<untrusted_data>` prompt-injection wrapping, and OS subprocess / Docker container sandboxing (`env: {}`).
 
-- **Orchestration & Gateway (`server.ts`, `src/server/routes/*`)**: TypeScript + Express + Vite/React Observability Console with Server-Sent Events (SSE) streaming, OpenAPI 3.1 auto-documentation (`/api/v1/openapi.json`), and strict Zod input validation.
-- **Dual-Mode Database & Vector Memory (`src/server/db/adapter.ts`, `migrations/001_init.sql`)**:
-  - **Production**: PostgreSQL + `pgvector` (`768`-dim embeddings) when `DATABASE_URL` is configured.
-  - **Embedded Standalone**: Persistent `node:sqlite` (`data/neo.db`) with cosine-similarity vector indexing across **Episodic**, **Semantic**, and **Procedural** memory.
-- **Background Queue (`src/server/queue/jobQueue.ts`)**: BullMQ + Redis when `REDIS_URL` is set, with a persistent SQLite-backed async worker queue fallback.
-- **Sovereign Standalone Engine (`src/server/neo/sovereignEngine.ts`, `src/server/llm/router.ts`)**: Runs independently in `NEO_LOCAL_ONLY=true` / `sovereign-local` mode (local extractive NLP + 768-d semantic/procedural RAG synthesis + live promoted module VM execution), or connects to self-hosted `NEO_INFERENCE_URL` / Ollama or neural compute accelerators with per-call token/latency telemetry.
-- **24/7 Knowledge Daemon & Reflection Worker (`src/server/knowledge/*`)**:
-  - Continuous web discovery via Neo GitHub & arXiv Direct Ingestor, SSRF-guarded HTTP extraction, optional SERP connectors (Tavily/Serper/Brave), and neural web indexing.
-  - Source reliability scoring, chunking, vector embedding, and versioned **Skill & Pattern Registry** updates.
-  - Post-task `ReflectionWorker` storing root causes and reusable procedural lessons.
-- **Safe Self-Upgrading Pipeline (`src/server/upgrades/pipeline.ts`)**:
-  - Diagnoses telemetry errors/latency and procedural gaps.
-  - Strictly blocks edits to immutable security/auth/secret paths (`.env`, `src/server/security/`, `migrations/`, `server.ts`).
-  - Runs generated unit tests inside an isolated V8 `node:vm` sandbox, checks before/after benchmark gates, and promotes approved modules to live execution via `POST /api/v1/modules/:id/execute`.
-- **Autonomous API Forge (`src/server/forge/generator.ts`)**:
-  - Synthesizes typed handlers, Zod schemas, OpenAPI specs, and unit tests from natural language, verifies 100% pass rate in the isolated sandbox, and hot-registers `/api/v1/custom/<slug>`.
-- **Multilingual Neos Brain (`src/server/business/analyzer.ts`)**:
-  - Deterministic double-entry ledger auditing (`SUM(debits) == SUM(credits)`), cash runway, working capital, LTV/CAC, churn, stockout & dead-stock forecasting, and native executive responses in **English (`en`)**, **Persian (`fa`)**, **Arabic (`ar`)**, and **Dutch (`nl`)**.
+## Quickstart (Local Development)
 
----
-
-## Quick Start
-
-### 1. Local / Standalone Mode
 ```bash
-cp .env.example .env
-# Set GEMINI_API_KEY in .env (and optionally OPENAI_API_KEY, DATABASE_URL, REDIS_URL)
 npm install
-npm test
 npm run dev
 ```
-Open `http://localhost:3000` for the Admin Observability Console.
 
-### 2. Production Docker Stack (Neo + Postgres/pgvector + Redis)
+Open `http://localhost:3000`, claim your initial admin passcode (`>= 6` characters) on the bootstrap screen, and explore the Control Plane.
+
+## Production & Multi-GPU Docker Deployment
+
 ```bash
-cp .env.example .env
-docker compose up --build -d
-```
-Postgres automatically initializes `migrations/001_init.sql` with `pgvector` enabled.
+# Single-node production build
+npm run build
+npm run start
 
----
+# PostgreSQL + pgvector + Redis + Ollama (dev / single GPU)
+docker compose --profile gpu-single up -d --build
 
-## Connecting Neos via `@neos/ai-sdk`
-
-1. Open **Security & Keys** in the Neo console and issue a scoped `neos_live_...` API key for your Neos workspace.
-2. Import `@neos/ai-sdk` from `packages/neos-ai-sdk/src/index.ts`:
-
-```ts
-import { NeoAiClient } from '@neos/ai-sdk';
-
-const neo = new NeoAiClient({
-  baseUrl: 'https://your-neo-ai-host',
-  apiKey: process.env.NEOS_AI_API_KEY!,
-});
-
-// Stream multilingual chat
-for await (const evt of neo.chatStream({
-  message: 'تحلیل جریان نقدی و وضعیت موجودی انبار این ماه را ارائه بده',
-  language: 'fa',
-  workspaceContext: { workspaceId: 'ws_01' },
-})) {
-  if (evt.event === 'delta') process.stdout.write(String(evt.data.text));
-}
-
-// Run multi-module business audit
-const audit = await neo.analyzeBusiness({
-  workspaceName: 'Neos Europe',
-  accounting: { cashBalance: 240000, monthlyRevenue: 65000, monthlyExpenses: 52000 },
-});
-
-// Forge a new custom API endpoint on demand
-await neo.forgeEndpoint('Score overdue invoices and draft payment reminders');
-
-// Invoke the hot-registered endpoint
-const score = await neo.callCustomEndpoint('overdue-invoice-scorer', {
-  invoiceId: 'INV-401',
-  amount: 12000,
-  daysOverdue: 45,
-});
+# Multi-GPU vLLM high-throughput cluster
+docker compose --profile gpu-multi up -d --build
 ```
 
----
+## Verification Suite
 
-## Core API Endpoints
-
-- `GET /api/v1/health` — Engine status, storage backend, memory count.
-- `POST /api/v1/chat/stream` — Context-aware multilingual SSE streaming.
-- `POST /api/v1/business/analyze` — Deep accounting, CRM, inventory/POS audit + signed HMAC webhook delivery.
-- `POST /api/v1/engineer/task` — Autonomous Plan → Code → Test → Fix engineering loop.
-- `POST /api/v1/knowledge/query` & `POST /api/v1/knowledge/learn` — RAG memory search & live web research.
-- `GET /api/v1/upgrades`, `POST /api/v1/upgrades/diagnose`, `POST /api/v1/upgrades/:id/approve`, `POST /api/v1/upgrades/:id/rollback`.
-- `POST /api/v1/forge/create`, `ALL /api/v1/custom/:slug`, `GET /api/v1/openapi.json`.
+```bash
+npm run lint
+npm test
+npm run build
+```

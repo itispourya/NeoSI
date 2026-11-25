@@ -1,10 +1,12 @@
 import {
   Activity,
-  BookOpen,
+  Brain,
   Cpu,
   GitBranch,
-  ShieldCheck,
-  TerminalSquare,
+  KeyRound,
+  ListChecks,
+  Terminal,
+  Wrench,
   X,
 } from 'lucide-react';
 import type { NavSection } from '../types/neo';
@@ -18,32 +20,52 @@ interface SidebarProps {
 
 const NAV_ITEMS: Array<{ id: NavSection; label: string; icon: typeof Activity }> = [
   { id: 'overview', label: 'Overview', icon: Activity },
-  { id: 'knowledge', label: 'Knowledge Daemon', icon: BookOpen },
-  { id: 'upgrades', label: 'Self-Upgrades', icon: GitBranch },
-  { id: 'forge', label: 'API Forge', icon: Cpu },
-  { id: 'workbench', label: 'Neos Brain', icon: TerminalSquare },
-  { id: 'security', label: 'Security & Keys', icon: ShieldCheck },
+  { id: 'tasks', label: 'Agent Tasks', icon: ListChecks },
+  { id: 'workbench', label: 'Cognitive Lab', icon: Terminal },
+  { id: 'memory', label: 'Memory & Graph', icon: Brain },
+  { id: 'models', label: 'Models & Bench', icon: Cpu },
+  { id: 'tools', label: 'Tools & Forge', icon: Wrench },
+  { id: 'evolution', label: 'Self-Evolution', icon: GitBranch },
+  { id: 'security', label: 'Security & Keys', icon: KeyRound },
 ];
 
 export function Sidebar({ activeSection, onSelect, mobileOpen, onCloseMobile }: SidebarProps) {
-  const navContent = (
-    <div className="flex h-full flex-col justify-between bg-[#0E131D] border-r border-slate-800/80 w-60 px-3 py-5">
-      <div>
-        <div className="flex items-center justify-between px-3 pb-6">
-          <span className="font-display text-lg font-semibold tracking-tight text-slate-100 whitespace-nowrap shrink-0">
-            Neo
-          </span>
+  return (
+    <>
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-40 lg:hidden"
+          onClick={onCloseMobile}
+          aria-hidden="true"
+        />
+      )}
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#0D131F] border-r border-slate-800 flex flex-col transition-transform duration-200 lg:static lg:translate-x-0 ${
+          mobileOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <div className="h-16 px-5 flex items-center justify-between border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded bg-blue-600/15 border border-blue-500/40 flex items-center justify-center text-blue-400 font-display font-bold text-sm">
+              N
+            </div>
+            <div>
+              <div className="font-display text-sm font-semibold text-slate-100 tracking-tight">NEO CORE</div>
+              <div className="text-[11px] font-mono text-slate-400">Sovereign OS v2</div>
+            </div>
+          </div>
           <button
             type="button"
             onClick={onCloseMobile}
-            aria-label="Close navigation menu"
-            className="lg:hidden p-1.5 text-slate-400 hover:text-slate-100 rounded-md"
+            className="lg:hidden p-1.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800"
+            aria-label="Close navigation"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <nav aria-label="Primary navigation" className="space-y-1">
+        <nav className="flex-1 p-3 space-y-1 overflow-y-auto" aria-label="Neo control plane sections">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const active = activeSection === item.id;
@@ -55,37 +77,25 @@ export function Sidebar({ activeSection, onSelect, mobileOpen, onCloseMobile }: 
                   onSelect(item.id);
                   onCloseMobile();
                 }}
-                aria-current={active ? 'page' : undefined}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded text-left text-xs font-medium transition-colors whitespace-nowrap ${
                   active
-                    ? 'bg-blue-600/15 text-blue-400'
-                    : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/50'
+                    ? 'bg-blue-600/15 text-blue-300 border border-blue-500/30'
+                    : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60 border border-transparent'
                 }`}
               >
                 <Icon className="w-4 h-4 shrink-0" />
-                <span className="truncate">{item.label}</span>
+                <span>{item.label}</span>
               </button>
             );
           })}
         </nav>
-      </div>
 
-      <div className="px-3 pt-4 border-t border-slate-800/80 text-xs text-slate-500 space-y-1">
-        <p className="text-slate-400 font-medium">Neo Sovereign Core</p>
-        <p>Gateway /api/v1</p>
-      </div>
-    </div>
-  );
-
-  return (
-    <>
-      <aside className="hidden lg:block shrink-0">{navContent}</aside>
-      {mobileOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden flex">
-          <div className="fixed inset-0 bg-black/60" onClick={onCloseMobile} />
-          <div className="relative z-10 h-full">{navContent}</div>
+        <div className="p-4 border-t border-slate-800 text-[11px] font-mono text-slate-400 space-y-1">
+          <div className="text-slate-300">Runtime Isolation</div>
+          <div>0 External Cloud AI Keys</div>
+          <div>Subprocess / Docker Sandbox</div>
         </div>
-      )}
+      </aside>
     </>
   );
 }

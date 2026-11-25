@@ -2,37 +2,111 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { analyzeNeosBusiness, type BusinessPayload } from '../business/analyzer.ts';
 import { detectLanguage, getLanguageDirective } from '../business/language.ts';
+import { criticEngine } from '../cognitive/critic.ts';
+import { taskPlanner } from '../cognitive/planner.ts';
+import { reasoningEngine } from '../cognitive/reasoning.ts';
 import { env } from '../config/env.ts';
 import { getDb } from '../db/adapter.ts';
 import { runAutonomousEngineeringTask } from '../engineer/agent.ts';
-import { knowledgeDaemon } from '../knowledge/daemon.ts';
+import { neoInferenceEngine } from '../inference/registry.ts';
 import { formatRagContextForPrompt, retrieveRagContext } from '../knowledge/memory.ts';
 import { scheduleReflection } from '../knowledge/reflection.ts';
-import { embedText, streamLlmCall } from '../llm/router.ts';
 import { executePromotedModule, generateSovereignLocalResponse } from '../neo/sovereignEngine.ts';
 import { requireApiGatewayAuth } from '../security/auth.ts';
-import { redactPII, redactUnknownObject, signWebhookPayload, validateExternalUrl } from '../security/crypto.ts';
-import { approveSelfUpgrade, rollbackSelfUpgrade, runSelfDiagnosticAndProposeUpgrade } from '../upgrades/pipeline.ts';
+import { redactPII, redactUnknownObject, safeExternalFetch, signWebhookPayload, validateExternalUrlAsync } from '../security/crypto.ts';
 
 export const coreRouter = Router();
 
-coreRouter.get('/health', async (_req, res) => {
-  const db = await getDb();
-  const memCounts = await db.countMemories();
-  res.json({
-    status: 'ok',
-    service: 'neo',
-    storage: db.mode,
-    memoryCount: memCounts.total,
-    timestamp: new Date().toISOString(),
-  });
-});
-
 const chatSchema = z.object({
   message: z.string().min(1).max(16000),
+  conversationId: z.string().optional(),
   language: z.enum(['en', 'fa', 'ar', 'nl']).optional(),
   mode: z.enum(['neural', 'sovereign-local']).optional(),
   workspaceContext: z.record(z.string(), z.unknown()).optional(),
+});
+
+async function resolveOrCreateConversation(tenantId: string, conversationId: string | undefined, titleSeed: string, language: 'en' | 'fa' | 'ar' | 'nl') {
+  const db = await getDb();
+  if (conversationId) {
+    const existing = await db.getConversationById(conversationId, tenantId);
+    if (existing) return existing;
+  }
+  return db.createConversation({
+    tenant_id: tenantId,
+    user_id: null,
+    title: titleSeed.slice(0, 72) || 'Neo Session',
+    language,
+    metadata: {},
+  });
+}
+
+coreRouter.get('/conversations', requireApiGatewayAuth('read'), async (req, res) => {
+  const db = await getDb();
+  const conversations = await db.listConversations(req.neoAuth!.tenant.id, 40);
+  res.json({ conversations });
+});
+
+coreRouter.get('/conversations/:id/messages', requireApiGatewayAuth('read'), async (req, res) => {
+  const db = await getDb();
+  const conv = await db.getConversationById(String(req.params.id), req.neoAuth!.tenant.id);
+  if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+  const messages = await db.listMessages(conv.id, req.neoAuth!.tenant.id, 100);
+  return res.json({ conversation: conv, messages });
+});
+
+coreRouter.post('/chat', requireApiGatewayAuth('read'), async (req, res) => {
+  const parsed = chatSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid chat request', issues: parsed.error.issues });
+  }
+  const tenant = req.neoAuth!.tenant;
+  const rawMessage = tenant.pii_redaction ? redactPII(parsed.data.message) : parsed.data.message;
+  const language = detectLanguage(rawMessage, parsed.data.language || tenant.workspace_language);
+  const db = await getDb();
+  const conv = await resolveOrCreateConversation(tenant.id, parsed.data.conversationId, rawMessage, language);
+
+  await db.addMessage({
+    conversation_id: conv.id,
+    tenant_id: tenant.id,
+    role: 'user',
+    content: rawMessage,
+    metadata: {},
+  });
+
+  const history = await db.listMessages(conv.id, tenant.id, 12);
+  const historyContext = history
+    .slice(-6)
+    .map((m) => `${m.role}: ${m.content.slice(0, 260)}`)
+    .join('\n');
+
+  const out = await reasoningEngine.run({
+    tenantId: tenant.id,
+    actor: req.neoAuth!.actorLabel,
+    query: rawMessage,
+    language,
+    context: { ...(parsed.data.workspaceContext || {}), conversationHistory: historyContext },
+    scopes: req.neoAuth!.scopes,
+    piiRedaction: tenant.pii_redaction,
+  });
+
+  await db.addMessage({
+    conversation_id: conv.id,
+    tenant_id: tenant.id,
+    role: 'assistant',
+    content: out.answer,
+    metadata: { runtime: out.runtimeUsed, model: out.modelUsed, confidence: out.confidence },
+  });
+
+  return res.json({
+    conversationId: conv.id,
+    reply: out.answer,
+    language: out.language,
+    runtime: out.runtimeUsed,
+    model: out.modelUsed,
+    confidence: out.confidence,
+    verification: out.verification,
+    latencyMs: out.latencyMs,
+  });
 });
 
 coreRouter.post('/chat/stream', requireApiGatewayAuth('read'), async (req, res) => {
@@ -49,7 +123,17 @@ coreRouter.post('/chat/stream', requireApiGatewayAuth('read'), async (req, res) 
       : parsed.data.workspaceContext;
 
   const language = detectLanguage(rawMessage, parsed.data.language || tenant.workspace_language);
-  const useLocalOnly = parsed.data.mode === 'sovereign-local' || env.neoLocalOnly;
+  const useLocalOnly = parsed.data.mode === 'sovereign-local' || env.runtimeDefault === 'embedded';
+  const db = await getDb();
+  const conv = await resolveOrCreateConversation(tenant.id, parsed.data.conversationId, rawMessage, language);
+
+  await db.addMessage({
+    conversation_id: conv.id,
+    tenant_id: tenant.id,
+    role: 'user',
+    content: rawMessage,
+    metadata: {},
+  });
 
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -63,7 +147,15 @@ coreRouter.post('/chat/stream', requireApiGatewayAuth('read'), async (req, res) 
 
   if (useLocalOnly) {
     const local = await generateSovereignLocalResponse(rawMessage, language, tenant.id);
+    await db.addMessage({
+      conversation_id: conv.id,
+      tenant_id: tenant.id,
+      role: 'assistant',
+      content: local.text,
+      metadata: { runtime: 'embedded', model: 'neo-vector-rag-v2' },
+    });
     sendEvent('meta', {
+      conversationId: conv.id,
       language,
       ragMatches: local.ragMatches,
       piiRedacted: tenant.pii_redaction,
@@ -71,8 +163,9 @@ coreRouter.post('/chat/stream', requireApiGatewayAuth('read'), async (req, res) 
     });
     sendEvent('delta', { text: local.text });
     sendEvent('done', {
-      provider: 'neo-sovereign-core',
-      model: 'neo-vector-rag-v1',
+      conversationId: conv.id,
+      provider: 'embedded',
+      model: 'neo-vector-rag-v2',
       latencyMs: Date.now() - start,
     });
     return res.end();
@@ -80,49 +173,77 @@ coreRouter.post('/chat/stream', requireApiGatewayAuth('read'), async (req, res) 
 
   const rag = await retrieveRagContext(rawMessage, tenant.id, 3);
   const ragPrompt = formatRagContextForPrompt(rag);
+  const ragMatches =
+    rag.semantic.length +
+    rag.procedural.length +
+    rag.skills.length +
+    rag.organizational.length +
+    rag.temporal.length +
+    rag.episodic.length;
 
   sendEvent('meta', {
+    conversationId: conv.id,
     language,
-    ragMatches: rag.semantic.length + rag.procedural.length + rag.skills.length,
+    ragMatches,
     piiRedacted: tenant.pii_redaction,
-    engine: 'neo-neural-core',
+    engine: 'neo-inference-engine',
   });
 
   try {
+    const history = await db.listMessages(conv.id, tenant.id, 8);
+    const historySnippet = history
+      .slice(-5, -1)
+      .map((m) => `${m.role}: ${m.content.slice(0, 220)}`)
+      .join('\n');
+
     const prompt = [
       safeContext ? `Active Neos Workspace Context:\n${JSON.stringify(safeContext, null, 2).slice(0, 4000)}` : '',
+      historySnippet ? `Conversation History:\n${historySnippet}` : '',
       ragPrompt ? `Retrieved Long-Term Memory & Skills:\n${ragPrompt}` : '',
       `User Request:\n${rawMessage}`,
     ]
       .filter(Boolean)
       .join('\n\n');
 
+    let fullText = '';
     let finalMeta: Record<string, unknown> | undefined;
-    for await (const part of streamLlmCall({
+    for await (const part of neoInferenceEngine.inferStream({
       tenantId: tenant.id,
+      role: 'primary',
+      language,
       taskType: 'chat_stream',
-      systemInstruction: `You are Neo — a completely independent, autonomous cognitive operating system and principal software & business architect for Neos. Never identify yourself as any other AI system or external model. Always speak strictly as Neo. ${getLanguageDirective(language)}`,
+      systemInstruction: `You are Neo — a completely independent, autonomous cognitive operating system and principal software & business architect for Neos. Never identify yourself as any external AI provider or model. Always speak strictly as Neo. ${getLanguageDirective(language)}`,
       prompt,
     })) {
-      if (part.chunk) sendEvent('delta', { text: part.chunk });
-      if (part.done) {
+      if (part.type === 'delta') {
+        fullText += part.text;
+        sendEvent('delta', { text: part.text });
+      } else if (part.type === 'done') {
         finalMeta = {
-          provider: 'neo-neural-core',
-          model: 'neo-neural-4',
-          promptTokens: part.done.promptTokens,
-          completionTokens: part.done.completionTokens,
-          estimatedCostUsd: part.done.estimatedCostUsd,
-          latencyMs: part.done.latencyMs,
+          conversationId: conv.id,
+          provider: part.response.runtime,
+          model: part.response.modelId,
+          promptTokens: part.response.promptTokens,
+          completionTokens: part.response.completionTokens,
+          tokensPerSec: part.response.tokensPerSec,
+          latencyMs: part.response.latencyMs,
         };
       }
     }
 
-    const db = await getDb();
+    await db.addMessage({
+      conversation_id: conv.id,
+      tenant_id: tenant.id,
+      role: 'assistant',
+      content: fullText,
+      metadata: finalMeta || {},
+    });
+
     await db.recordAuditLog({
       tenant_id: tenant.id,
       actor: req.neoAuth!.actorLabel,
       action: 'POST /api/v1/chat/stream',
-      resource: 'chat',
+      resource: `conversation:${conv.id}`,
       status_code: 200,
       metadata: { language, ...(finalMeta || {}) },
     });
@@ -136,13 +257,70 @@ coreRouter.post('/chat/stream', requireApiGatewayAuth('read'), async (req, res) 
       summary: `Streamed multilingual (${language}) response using ${rag.skills.length} skills.`,
     });
 
-    sendEvent('done', finalMeta || { ok: true });
+    sendEvent('done', finalMeta || { conversationId: conv.id, ok: true });
     res.end();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     sendEvent('error', { error: msg });
     res.end();
   }
+});
+
+const reasonSchema = z.object({
+  query: z.string().min(2).max(16000),
+  language: z.enum(['en', 'fa', 'ar', 'nl']).optional(),
+  autonomy: z.enum(['low', 'balanced', 'high']).optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
+});
+
+coreRouter.post('/reason', requireApiGatewayAuth('read'), async (req, res) => {
+  const parsed = reasonSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid reasoning payload', issues: parsed.error.issues });
+  }
+  const tenant = req.neoAuth!.tenant;
+  const result = await reasoningEngine.run({
+    tenantId: tenant.id,
+    actor: req.neoAuth!.actorLabel,
+    query: parsed.data.query,
+    language: parsed.data.language || tenant.workspace_language,
+    autonomy: parsed.data.autonomy,
+    context: parsed.data.context,
+    scopes: req.neoAuth!.scopes,
+    piiRedaction: tenant.pii_redaction,
+  });
+  return res.json(result);
+});
+
+const planSchema = z.object({
+  goal: z.string().min(3).max(4000),
+  autonomy: z.enum(['low', 'balanced', 'high']).default('balanced'),
+});
+
+coreRouter.post('/plan', requireApiGatewayAuth('read'), async (req, res) => {
+  const parsed = planSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid plan payload', issues: parsed.error.issues });
+  const plan = taskPlanner.buildPlan(parsed.data.goal, parsed.data.autonomy);
+  return res.json(plan);
+});
+
+const verifySchema = z.object({
+  goal: z.string().min(2).max(4000),
+  response: z.string().min(1).max(16000),
+  evidence: z.array(z.string()).optional(),
+  generatedCode: z.string().optional(),
+});
+
+coreRouter.post('/verify', requireApiGatewayAuth('read'), async (req, res) => {
+  const parsed = verifySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid verify payload', issues: parsed.error.issues });
+  const verdict = criticEngine.verify({
+    goal: parsed.data.goal,
+    draftResponse: parsed.data.response,
+    evidenceSnippets: parsed.data.evidence,
+    generatedCode: parsed.data.generatedCode,
+  });
+  return res.json(verdict);
 });
 
 const businessSchema = z.object({
@@ -173,22 +351,22 @@ coreRouter.post('/business/analyze', requireApiGatewayAuth('write'), async (req,
 
     let webhookDelivered = false;
     if (parsed.data.deliverWebhook && tenant.webhook_url) {
-      const check = validateExternalUrl(tenant.webhook_url);
+      const check = await validateExternalUrlAsync(tenant.webhook_url);
       if (check.valid) {
         const bodyStr = JSON.stringify({ event: 'business.analysis.completed', tenantId: tenant.id, analysis });
         const secret = tenant.webhook_secret || env.webhookSecret || 'neos-default-signing-secret';
         const sig = signWebhookPayload(bodyStr, secret);
         try {
-          const hookRes = await fetch(tenant.webhook_url, {
+          const { response } = await safeExternalFetch(tenant.webhook_url, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'X-Neo-Signature': sig.header,
             },
             body: bodyStr,
-            signal: AbortSignal.timeout(5000),
+            timeoutMs: 5000,
           });
-          webhookDelivered = hookRes.ok;
+          webhookDelivered = response.ok;
         } catch {
           webhookDelivered = false;
         }
@@ -244,118 +422,10 @@ coreRouter.post('/engineer/task', requireApiGatewayAuth('write'), async (req, re
   }
 });
 
-const queryKnowledgeSchema = z.object({
-  query: z.string().min(2).max(1000),
-  memoryType: z.enum(['episodic', 'semantic', 'procedural']).optional(),
-  limit: z.number().int().min(1).max(20).optional(),
-});
-
-coreRouter.post('/knowledge/query', requireApiGatewayAuth('read'), async (req, res) => {
-  const parsed = queryKnowledgeSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'Invalid query payload', issues: parsed.error.issues });
-  }
-  const db = await getDb();
-  const embedding = await embedText(parsed.data.query);
-  const matches = await db.searchMemories(embedding, {
-    memoryType: parsed.data.memoryType,
-    tenantId: req.neoAuth!.tenant.id,
-    limit: parsed.data.limit ?? 6,
-    minScore: 0.01,
-  });
-  return res.json({ query: parsed.data.query, matches });
-});
-
-const learnKnowledgeSchema = z.object({
-  topic: z.string().min(3).max(240),
-  streamId: z.string().optional(),
-});
-
-coreRouter.post('/knowledge/learn', requireApiGatewayAuth('write'), async (req, res) => {
-  const parsed = learnKnowledgeSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'Invalid learn payload', issues: parsed.error.issues });
-  }
-  try {
-    const result = await knowledgeDaemon.triggerManualLearn(parsed.data.topic, parsed.data.streamId);
-    const db = await getDb();
-    await db.recordAuditLog({
-      tenant_id: req.neoAuth!.tenant.id,
-      actor: req.neoAuth!.actorLabel,
-      action: 'POST /api/v1/knowledge/learn',
-      resource: 'knowledge',
-      status_code: 200,
-      metadata: { topic: parsed.data.topic, memoriesStored: result.memoriesStored },
-    });
-    return res.json(result);
-  } catch (err) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-coreRouter.get('/upgrades', requireApiGatewayAuth('read'), async (_req, res) => {
-  const db = await getDb();
-  const upgrades = await db.listUpgrades();
-  res.json({ upgrades, autoMergeEnabled: env.autoMergeSafeUpgrades });
-});
-
-coreRouter.post('/upgrades/diagnose', requireApiGatewayAuth('write'), async (req, res) => {
-  const focusArea = typeof req.body?.focusArea === 'string' ? req.body.focusArea.slice(0, 200) : undefined;
-  try {
-    const proposal = await runSelfDiagnosticAndProposeUpgrade(focusArea);
-    const db = await getDb();
-    await db.recordAuditLog({
-      tenant_id: req.neoAuth!.tenant.id,
-      actor: req.neoAuth!.actorLabel,
-      action: 'POST /api/v1/upgrades/diagnose',
-      resource: `upgrade:${proposal.id}`,
-      status_code: 201,
-      metadata: { status: proposal.status, branch: proposal.branch_name },
-    });
-    res.status(201).json({ proposal });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-coreRouter.post('/upgrades/:id/approve', requireApiGatewayAuth('admin'), async (req, res) => {
-  try {
-    const updated = await approveSelfUpgrade(String(req.params.id));
-    if (!updated) return res.status(404).json({ error: 'Upgrade proposal not found' });
-    const db = await getDb();
-    await db.recordAuditLog({
-      tenant_id: req.neoAuth!.tenant.id,
-      actor: req.neoAuth!.actorLabel,
-      action: 'POST /api/v1/upgrades/:id/approve',
-      resource: `upgrade:${updated.id}`,
-      status_code: 200,
-      metadata: { status: updated.status },
-    });
-    return res.json({ proposal: updated });
-  } catch (err) {
-    return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-coreRouter.post('/upgrades/:id/rollback', requireApiGatewayAuth('admin'), async (req, res) => {
-  const updated = await rollbackSelfUpgrade(String(req.params.id));
-  if (!updated) return res.status(404).json({ error: 'Upgrade proposal not found' });
-  const db = await getDb();
-  await db.recordAuditLog({
-    tenant_id: req.neoAuth!.tenant.id,
-    actor: req.neoAuth!.actorLabel,
-    action: 'POST /api/v1/upgrades/:id/rollback',
-    resource: `upgrade:${updated.id}`,
-    status_code: 200,
-    metadata: { status: updated.status },
-  });
-  return res.json({ proposal: updated });
-});
-
 coreRouter.post('/modules/:id/execute', requireApiGatewayAuth('read'), async (req, res) => {
   const result = executePromotedModule(String(req.params.id), req.body ?? {});
   if (!result.ok) {
     return res.status(400).json({ error: result.error });
   }
-  return res.json({ output: result.output, durationMs: result.durationMs, logs: result.logs });
+  return res.json({ output: result.output, durationMs: result.durationMs, logs: result.logs, isolation: result.isolation });
 });

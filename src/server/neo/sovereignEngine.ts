@@ -55,7 +55,7 @@ export function listPromotedModules(): PromotedModule[] {
 export function executePromotedModule(id: string, input: unknown): SandboxExecutionResult {
   const target = path.join(PROMOTED_DIR, `${id}.json`);
   if (!fs.existsSync(target)) {
-    return { ok: false, logs: [], durationMs: 0, error: `Promoted module '${id}' not found` };
+    return { ok: false, logs: [], durationMs: 0, error: `Promoted module '${id}' not found`, isolation: 'subprocess' };
   }
   const mod = JSON.parse(fs.readFileSync(target, 'utf8')) as PromotedModule;
   return executeHandlerInSandbox(mod.code, input, 1500);
@@ -121,7 +121,13 @@ export async function generateSovereignLocalResponse(
   tenantId = 'global'
 ): Promise<{ text: string; ragMatches: number }> {
   const rag = await retrieveRagContext(query, tenantId, 4);
-  const ragMatches = rag.semantic.length + rag.procedural.length + rag.skills.length;
+  const ragMatches =
+    rag.semantic.length +
+    rag.procedural.length +
+    rag.skills.length +
+    rag.organizational.length +
+    rag.temporal.length +
+    rag.episodic.length;
 
   const headers: Record<SupportedLanguage, string> = {
     en: 'Neo Sovereign Core — Grounded Memory Synthesis',

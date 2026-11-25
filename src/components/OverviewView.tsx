@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import type { AdminOverviewPayload, NavSection } from '../types/neo';
 
 interface OverviewViewProps {
@@ -7,195 +6,171 @@ interface OverviewViewProps {
 }
 
 export function OverviewView({ data, onNavigate }: OverviewViewProps) {
-  const [copiedSdk, setCopiedSdk] = useState(false);
-
-  const sdkSnippet = `import { NeoAiClient } from '@neos/ai-sdk';
-
-const neo = new NeoAiClient({
-  baseUrl: '${window.location.origin}',
-  apiKey: process.env.NEOS_AI_API_KEY!,
-});
-
-const audit = await neo.analyzeBusiness({
-  workspaceName: 'Neos Europe',
-  language: 'en',
-  accounting: { cashBalance: 240000, monthlyRevenue: 65000, monthlyExpenses: 52000 },
-});`;
-
-  const copySdk = async () => {
-    await navigator.clipboard.writeText(sdkSnippet);
-    setCopiedSdk(true);
-    setTimeout(() => setCopiedSdk(false), 1800);
-  };
+  const hw = data.hardware;
+  const activeModels = data.models.filter((m) => m.deployment_status === 'active');
+  const mem = data.memoryCounts;
+  const completedTasks = data.tasks.filter((t) => t.status === 'completed').length;
+  const latestEval = data.evaluations[0];
 
   return (
-    <div className="space-y-8">
-      {/* KPI Grid */}
-      <section aria-label="Core telemetry metrics" className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <div className="bg-[#111827] border border-slate-800/80 rounded-lg p-5">
-          <p className="text-xs text-slate-400">Memories Indexed</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100 font-mono tabular-nums">
-            {data.memoryCounts.total}
-          </p>
-          <p className="mt-2 text-xs text-slate-500 font-mono tabular-nums">
-            {data.memoryCounts.semantic} sem · {data.memoryCounts.procedural} proc · {data.memoryCounts.episodic} ep
-          </p>
-        </div>
-
-        <div className="bg-[#111827] border border-slate-800/80 rounded-lg p-5">
-          <p className="text-xs text-slate-400">Forged APIs & Modules</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100 font-mono tabular-nums">
-            {data.dynamicApis.filter((a) => a.enabled).length}
-          </p>
-          <p className="mt-2 text-xs text-slate-500 font-mono tabular-nums">
-            {data.dynamicApis.reduce((s, a) => s + a.call_count, 0)} calls · {data.promotedModules?.length || 0} promoted
-          </p>
-        </div>
-
-        <div className="bg-[#111827] border border-slate-800/80 rounded-lg p-5">
-          <p className="text-xs text-slate-400">Cognitive Calls & Success</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100 font-mono tabular-nums">
-            {data.telemetrySummary.totalCalls}
-          </p>
-          <p className="mt-2 text-xs text-emerald-400 font-mono tabular-nums">
-            {data.telemetrySummary.successRate}% success · {data.telemetrySummary.avgLatencyMs}ms avg
-          </p>
-        </div>
-
-        <div className="bg-[#111827] border border-slate-800/80 rounded-lg p-5">
-          <p className="text-xs text-slate-400">Token Cost & Codebase</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100 font-mono tabular-nums">
-            ${data.telemetrySummary.totalCostUsd.toFixed(4)}
-          </p>
-          <p className="mt-2 text-xs text-slate-500 font-mono tabular-nums">
-            {data.telemetrySummary.totalTokens.toLocaleString()} tokens · {data.repoSummary.totalFiles} files
-          </p>
-        </div>
-      </section>
-
-      {/* Multi-Provider Router & Search Matrix */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-[#111827] border border-slate-800/80 rounded-lg p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-display text-sm font-semibold text-slate-100">Neo Core Subsystems</h2>
-            <span className="text-xs text-slate-400">Queue: {data.providers.queue}</span>
+    <div className="space-y-6">
+      {/* Primary KPI Strip */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="bg-[#111827] border border-slate-800 rounded p-4">
+          <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400">Host Compute</div>
+          <div className="mt-1 font-mono tabular-nums text-xl font-semibold text-slate-100">
+            {hw.cpuCores} vCPU / {hw.totalRamGb} GB RAM
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400">
-                  <th className="py-2 font-medium">Subsystem</th>
-                  <th className="py-2 font-medium">Engine</th>
-                  <th className="py-2 font-medium text-right">State</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {data.providers.llm.map((p) => (
-                  <tr key={p.id} className="h-9">
-                    <td className="py-2 text-slate-200 font-medium">{p.name}</td>
-                    <td className="py-2 text-slate-400 font-mono">{p.defaultModel}</td>
-                    <td className={`py-2 text-right font-medium ${p.configured ? 'text-emerald-400' : 'text-slate-500'}`}>
-                      {p.configured ? 'Active' : 'Standby'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="mt-1 text-xs font-mono text-slate-400">
+            {hw.hasGpu ? `${hw.totalVramGb} GB VRAM` : 'CPU-only'} · {hw.diskFreeGb} GB free
           </div>
         </div>
 
-        <div className="bg-[#111827] border border-slate-800/80 rounded-lg p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-display text-sm font-semibold text-slate-100">Neo Autonomous Discovery</h2>
+        <div className="bg-[#111827] border border-slate-800 rounded p-4">
+          <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400">Active Models</div>
+          <div className="mt-1 font-mono tabular-nums text-xl font-semibold text-slate-100">
+            {activeModels.length} Active / {data.models.length} Registered
+          </div>
+          <div className="mt-1 text-xs font-mono text-slate-400 truncate">
+            {activeModels.map((m) => m.id).join(', ') || 'neo-embedded-core-v1'}
+          </div>
+        </div>
+
+        <div className="bg-[#111827] border border-slate-800 rounded p-4">
+          <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400">7-Layer Memory</div>
+          <div className="mt-1 font-mono tabular-nums text-xl font-semibold text-slate-100">
+            {mem.total} Records
+          </div>
+          <div className="mt-1 text-xs font-mono text-slate-400">
+            S:{mem.semantic} · P:{mem.procedural} · E:{mem.episodic} · T:{mem.temporal}
+          </div>
+        </div>
+
+        <div className="bg-[#111827] border border-slate-800 rounded p-4">
+          <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400">Benchmarks & Tasks</div>
+          <div className="mt-1 font-mono tabular-nums text-xl font-semibold text-slate-100">
+            {latestEval ? `${latestEval.overall_score}% Bench` : 'Ready'}
+          </div>
+          <div className="mt-1 text-xs font-mono text-slate-400">
+            {completedTasks}/{data.tasks.length} Tasks · {data.telemetrySummary.totalCalls} Infer Calls
+          </div>
+        </div>
+      </div>
+
+      {/* Subsystems + Runtime Health */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-display text-sm font-semibold text-slate-100">Inference Runtime Health</h2>
             <button
               type="button"
-              onClick={() => onNavigate('knowledge')}
-              className="text-xs text-blue-400 hover:underline whitespace-nowrap shrink-0"
+              onClick={() => onNavigate('models')}
+              className="text-xs font-medium text-blue-400 hover:text-blue-300 whitespace-nowrap"
             >
-              Manage Streams
+              Manage Models →
             </button>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400">
-                  <th className="py-2 font-medium">Source Engine</th>
-                  <th className="py-2 font-medium text-right">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {data.providers.search.map((s) => (
-                  <tr key={s.id} className="h-9">
-                    <td className="py-2 text-slate-200 font-medium">{s.name}</td>
-                    <td className={`py-2 text-right font-medium ${s.configured ? 'text-emerald-400' : 'text-slate-500'}`}>
-                      {s.configured ? 'Active' : 'Optional'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="divide-y divide-slate-800/80">
+            {data.runtimeHealth.map((rt) => (
+              <div key={`${rt.runtime}:${rt.modelId}`} className="py-2.5 flex items-center justify-between gap-4 text-xs">
+                <div className="min-w-0">
+                  <div className="font-mono text-slate-200">{rt.runtime}</div>
+                  <div className="text-[11px] text-slate-400 truncate">{rt.message}</div>
+                </div>
+                <div className="text-right font-mono tabular-nums shrink-0">
+                  <div className={rt.status === 'healthy' ? 'text-emerald-400' : 'text-amber-400'}>{rt.status}</div>
+                  <div className="text-[11px] text-slate-500">{rt.latencyMs}ms</div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
-      </section>
 
-      {/* Background Jobs & Neos SDK */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-[#111827] border border-slate-800/80 rounded-lg p-5">
-          <h2 className="font-display text-sm font-semibold text-slate-100 mb-4">Recent Background Jobs</h2>
-          {data.jobs.length === 0 ? (
-            <p className="text-xs text-slate-400 py-6">
-              No background jobs executed yet. Trigger a Knowledge Learn run or Neos Brain task to populate worker telemetry.
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-slate-800 text-slate-400">
-                    <th className="py-2 font-medium">Job Type</th>
-                    <th className="py-2 font-medium">Queue</th>
-                    <th className="py-2 font-medium text-right">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60">
-                  {data.jobs.slice(0, 8).map((job) => (
-                    <tr key={job.id} className="h-9">
-                      <td className="py-2 font-mono text-slate-200">{job.job_type}</td>
-                      <td className="py-2 text-slate-400">{job.queue_name}</td>
-                      <td
-                        className={`py-2 text-right font-medium ${
-                          job.status === 'completed'
-                            ? 'text-emerald-400'
-                            : job.status === 'failed'
-                            ? 'text-rose-400'
-                            : 'text-amber-400'
-                        }`}
-                      >
-                        {job.status}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-display text-sm font-semibold text-slate-100">7-Layer Cognitive Memory Breakdown</h2>
+            <button
+              type="button"
+              onClick={() => onNavigate('memory')}
+              className="text-xs font-medium text-blue-400 hover:text-blue-300 whitespace-nowrap"
+            >
+              Open Memory & Graph →
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            {(['working', 'episodic', 'semantic', 'procedural', 'personal', 'organizational', 'temporal'] as const).map((layer) => (
+              <div key={layer} className="bg-[#0B0F17] border border-slate-800 rounded p-3">
+                <div className="text-[11px] font-mono text-slate-400 uppercase">{layer}</div>
+                <div className="mt-1 font-mono tabular-nums text-lg font-semibold text-slate-100">{mem[layer] ?? 0}</div>
+              </div>
+            ))}
+            <div className="bg-[#0B0F17] border border-slate-800 rounded p-3">
+              <div className="text-[11px] font-mono text-slate-400 uppercase">Graph</div>
+              <div className="mt-1 font-mono tabular-nums text-lg font-semibold text-slate-100">
+                {data.graph.entities.length} / {data.graph.relationships.length}
+              </div>
             </div>
-          )}
+          </div>
+        </div>
+      </div>
+
+      {/* Infrastructure Subsystems + Scheduler Status */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-3">
+          <h2 className="font-display text-sm font-semibold text-slate-100">Infrastructure & Security Boundaries</h2>
+          <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+            <div className="bg-[#0B0F17] border border-slate-800 rounded p-3">
+              <div className="text-slate-400 text-[11px]">DATABASE</div>
+              <div className="text-slate-200 mt-1">{data.subsystems.storage}</div>
+            </div>
+            <div className="bg-[#0B0F17] border border-slate-800 rounded p-3">
+              <div className="text-slate-400 text-[11px]">QUEUE BACKEND</div>
+              <div className="text-slate-200 mt-1">{data.subsystems.queue}</div>
+            </div>
+            <div className="bg-[#0B0F17] border border-slate-800 rounded p-3">
+              <div className="text-slate-400 text-[11px]">EXECUTION SANDBOX</div>
+              <div className="text-slate-200 mt-1">{data.subsystems.sandbox}</div>
+            </div>
+            <div className="bg-[#0B0F17] border border-slate-800 rounded p-3">
+              <div className="text-slate-400 text-[11px]">REPO CODEBASE</div>
+              <div className="text-slate-200 mt-1 tabular-nums">
+                {data.repoSummary.totalFiles} files · {data.repoSummary.totalLines} LOC
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div className="bg-[#111827] border border-slate-800/80 rounded-lg p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-display text-sm font-semibold text-slate-100">Neos TypeScript SDK Quick-Connect</h2>
+        <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-display text-sm font-semibold text-slate-100">Autonomous Scheduler Jobs</h2>
             <button
               type="button"
-              onClick={copySdk}
-              className="px-3 py-1.5 text-xs font-medium rounded-md bg-slate-800 text-slate-200 hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
+              onClick={() => onNavigate('evolution')}
+              className="text-xs font-medium text-blue-400 hover:text-blue-300 whitespace-nowrap"
             >
-              {copiedSdk ? 'Copied' : 'Copy Snippet'}
+              Configure →
             </button>
           </div>
-          <pre className="p-3 rounded-md bg-[#0B0F17] border border-slate-800 text-xs font-mono text-slate-300 overflow-x-auto leading-relaxed">
-            {sdkSnippet}
-          </pre>
+          <div className="divide-y divide-slate-800/80">
+            {data.scheduledJobs.map((job) => (
+              <div key={job.id} className="py-2 flex items-center justify-between gap-3 text-xs">
+                <div className="min-w-0">
+                  <div className="text-slate-200 font-medium truncate">{job.name}</div>
+                  <div className="font-mono text-[11px] text-slate-400">
+                    {job.job_kind} · {job.priority}
+                  </div>
+                </div>
+                <div className="font-mono tabular-nums text-right shrink-0">
+                  <div className={job.enabled ? 'text-emerald-400' : 'text-slate-500'}>
+                    {job.enabled ? 'enabled' : 'paused'}
+                  </div>
+                  <div className="text-[11px] text-slate-500">runs: {job.run_count}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-      </section>
+      </div>
     </div>
   );
 }

@@ -5,22 +5,26 @@ dotenv.config();
 
 const EPHEMERAL_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
 
+export type RuntimeBackendKind = 'auto' | 'vllm' | 'ollama' | 'tensorrt-llm' | 'transformers' | 'embedded';
+export type SandboxModeKind = 'subprocess' | 'docker';
+
 export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
-  port: Number(process.env.PORT || 3000),
-  appUrl: process.env.APP_URL || 'http://localhost:3000',
+  port: Number(process.env.PORT || process.env.NEO_PORT || 3000),
+  appUrl: process.env.APP_URL || process.env.NEO_URL || 'http://localhost:3000',
 
-  // Neo Sovereign Compute & Neural Backends
-  neoLocalOnly: process.env.NEO_LOCAL_ONLY === 'true',
-  neoInferenceUrl: process.env.NEO_INFERENCE_URL || '',
-  neoInferenceModel: process.env.NEO_INFERENCE_MODEL || 'neo-core-instruct',
-  geminiApiKey: process.env.GEMINI_API_KEY || '',
-  openaiApiKey: process.env.OPENAI_API_KEY || '',
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
-  openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
-  ollamaBaseUrl: process.env.OLLAMA_BASE_URL || '',
+  // Neo Sovereign Neural Compute Runtimes (zero external cloud AI dependency)
+  runtimeDefault: (process.env.NEO_RUNTIME_DEFAULT || 'auto') as RuntimeBackendKind,
+  ollamaBaseUrl: process.env.NEO_OLLAMA_URL || process.env.NEO_OLLAMA_BASE_URL || process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
+  vllmBaseUrl: process.env.NEO_VLLM_URL || process.env.NEO_VLLM_BASE_URL || '',
+  trtLlmBaseUrl: process.env.NEO_TRTLLM_URL || process.env.NEO_TENSORRT_LLM_BASE_URL || '',
+  hfBaseUrl: process.env.NEO_HF_URL || process.env.NEO_HF_INFERENCE_BASE_URL || '',
+  customInferenceUrl: process.env.NEO_INFERENCE_URL || '',
+  primaryModel: process.env.NEO_PRIMARY_MODEL || process.env.NEO_INFERENCE_MODEL || 'neo-embedded-core-v1',
+  embeddingModel: process.env.NEO_EMBEDDING_MODEL || 'neo-embed-local-v2',
+  modelsDir: process.env.NEO_MODELS_DIR || 'data/models',
 
-  // Web Discovery
+  // Web Discovery (optional non-AI public search keys; defaults to public GitHub/arXiv/Wikipedia/HTTP)
   tavilyApiKey: process.env.TAVILY_API_KEY || '',
   serperApiKey: process.env.SERPER_API_KEY || '',
   braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',
@@ -30,59 +34,76 @@ export const env = {
   databaseUrl: process.env.DATABASE_URL || '',
   redisUrl: process.env.REDIS_URL || '',
 
-  // Self-upgrade & Security
-  autoMergeSafeUpgrades: process.env.AUTO_MERGE_SAFE_UPGRADES === 'true',
-  knowledgeDaemonIntervalMs: Number(process.env.KNOWLEDGE_DAEMON_INTERVAL_MS || 900_000),
-  adminPasscode: process.env.NEO_ADMIN_PASSCODE || '',
+  // Sandbox & Evolution Controls
+  sandboxMode: (process.env.NEO_SANDBOX_MODE || 'subprocess') as SandboxModeKind,
+  autoMergeSafeUpgrades: (process.env.AUTO_MERGE_SAFE_UPGRADES || process.env.NEO_AUTO_MERGE_SAFE_UPGRADES) === 'true',
+  schedulerEnabled: process.env.NEO_SCHEDULER_ENABLED !== 'false',
+  knowledgeDaemonIntervalMs: Number(process.env.KNOWLEDGE_DAEMON_INTERVAL_MS || process.env.NEO_KNOWLEDGE_INTERVAL_MS || 900_000),
+  schedulerTickMs: Number(process.env.NEO_SCHEDULER_TICK_MS || 60_000),
+
+  // Security Controls (fail-closed defaults)
+  adminPasscode: process.env.NEO_ADMIN_PASSCODE || process.env.ADMIN_PASSCODE || '',
   webhookSecret: process.env.NEOS_WEBHOOK_SECRET || '',
   sessionSecret: process.env.NEO_SESSION_SECRET || EPHEMERAL_SESSION_SECRET,
+  corsAllowedOrigins: (process.env.NEO_CORS_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
 };
 
-export function getConfiguredProviders() {
-  const hasNeuralCompute = Boolean(
-    env.neoInferenceUrl ||
-      env.ollamaBaseUrl ||
-      (env.geminiApiKey && env.geminiApiKey !== 'MY_GEMINI_API_KEY') ||
-      env.openaiApiKey ||
-      env.anthropicApiKey ||
-      env.openrouterApiKey
-  );
-
+export function getConfiguredSubsystems() {
   return {
-    llm: [
+    runtimes: [
       {
-        id: 'neo_sovereign',
-        name: 'Neo Sovereign Memory & Symbolic Core',
+        id: 'embedded',
+        name: 'Neo Embedded Cognitive Core',
         configured: true,
-        defaultModel: 'neo-vector-rag-v1',
+        defaultModel: 'neo-embedded-core-v1',
+        endpoint: 'in-process',
       },
       {
-        id: 'neo_local_inference',
-        name: 'Neo Self-Hosted Inference Node',
-        configured: Boolean(env.neoInferenceUrl || env.ollamaBaseUrl),
-        defaultModel: env.neoInferenceModel,
+        id: 'ollama',
+        name: 'Ollama Local Model Runtime',
+        configured: Boolean(env.ollamaBaseUrl),
+        defaultModel: env.primaryModel,
+        endpoint: env.ollamaBaseUrl || null,
       },
       {
-        id: 'neo_neural_compute',
-        name: 'Neo Neural Compute Accelerator',
-        configured: hasNeuralCompute && !env.neoLocalOnly,
-        defaultModel: env.neoLocalOnly ? 'disabled (local-only)' : 'neo-neural-4',
+        id: 'vllm',
+        name: 'vLLM High-Throughput Server',
+        configured: Boolean(env.vllmBaseUrl),
+        defaultModel: env.primaryModel,
+        endpoint: env.vllmBaseUrl || null,
       },
       {
-        id: 'neo_sandbox_vm',
-        name: 'Neo Isolated V8 Execution Sandbox',
-        configured: true,
-        defaultModel: 'node-vm-strict',
+        id: 'tensorrt-llm',
+        name: 'NVIDIA TensorRT-LLM Engine',
+        configured: Boolean(env.trtLlmBaseUrl),
+        defaultModel: env.primaryModel,
+        endpoint: env.trtLlmBaseUrl || null,
+      },
+      {
+        id: 'transformers',
+        name: 'HuggingFace Transformers Runtime',
+        configured: Boolean(env.hfBaseUrl),
+        defaultModel: env.primaryModel,
+        endpoint: env.hfBaseUrl || null,
       },
     ],
     search: [
-      { id: 'github_arxiv', name: 'Neo GitHub & arXiv Direct Ingestor', configured: true },
-      { id: 'direct_http', name: 'Neo SSRF-Guarded Web Fetcher', configured: true },
-      { id: 'grounded_web', name: 'Neo Deep Web Discovery Index', configured: hasNeuralCompute && !env.neoLocalOnly },
-      { id: 'external_serp', name: 'Optional SERP Connectors (Tavily/Serper/Brave)', configured: Boolean(env.tavilyApiKey || env.serperApiKey || env.braveSearchApiKey) },
+      { id: 'github_arxiv', name: 'GitHub & arXiv Direct Ingestor', configured: true },
+      { id: 'wikipedia_direct', name: 'Wikipedia & Direct SSRF-Guarded Fetcher', configured: true },
+      {
+        id: 'optional_serp',
+        name: 'Optional Public Search Adapters (Tavily/Serper/Brave)',
+        configured: Boolean(env.tavilyApiKey || env.serperApiKey || env.braveSearchApiKey),
+      },
     ],
     storage: env.databaseUrl ? 'postgresql+pgvector' : 'sqlite-embedded',
     queue: env.redisUrl ? 'bullmq+redis' : 'persistent-worker-queue',
-    localOnlyMode: env.neoLocalOnly,
+    sandbox: env.sandboxMode,
+    sandboxMode: env.sandboxMode,
+    runtimeDefault: env.runtimeDefault,
+    independentCore: true,
   };
 }

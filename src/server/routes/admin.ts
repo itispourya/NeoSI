@@ -1,9 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { getConfiguredProviders } from '../config/env.ts';
+import { getConfiguredSubsystems } from '../config/env.ts';
 import { getDb } from '../db/adapter.ts';
 import { indexWorkspaceCodebase } from '../engineer/repoIndex.ts';
+import { inspectHardware } from '../inference/hardware.ts';
+import { modelRegistry, neoInferenceEngine } from '../inference/registry.ts';
+import { getCapabilityRegistry } from '../multimodal/capabilities.ts';
 import { listPromotedModules } from '../neo/sovereignEngine.ts';
+import { autonomousScheduler } from '../scheduler/autonomousScheduler.ts';
 import {
   claimInitialAdminPasscode,
   getAdminLockState,
@@ -11,7 +15,8 @@ import {
   requireAdminConsoleAuth,
   verifyAdminCredential,
 } from '../security/auth.ts';
-import { generateScopedApiKey, signWebhookPayload, validateExternalUrl } from '../security/crypto.ts';
+import { generateScopedApiKey, signWebhookPayload, validateExternalUrlAsync } from '../security/crypto.ts';
+import { toolRegistry } from '../tools/registry.ts';
 
 export const adminRouter = Router();
 
@@ -55,11 +60,27 @@ adminRouter.get('/overview', requireAdminConsoleAuth, async (_req, res) => {
     telemetrySummary,
     auditLogs,
     lockState,
+    hardware,
+    runtimeHealth,
+    models,
+    modelCompatibility,
+    evaluations,
+    tasks,
+    dbTools,
+    toolExecutions,
+    scheduledJobs,
+    experiments,
+    trainingJobs,
+    researchReports,
+    knowledgeSources,
+    entities,
+    relationships,
+    capabilities,
   ] = await Promise.all([
     db.listTenants(),
     db.listApiKeys(),
     db.countMemories(),
-    db.listMemories({ limit: 30 }),
+    db.listMemories({ limit: 40 }),
     db.listSkills(),
     db.listTopicStreams(),
     db.listUpgrades(),
@@ -68,12 +89,31 @@ adminRouter.get('/overview', requireAdminConsoleAuth, async (_req, res) => {
     db.getTelemetrySummary(),
     db.listAuditLogs(30),
     getAdminLockState(),
+    inspectHardware(),
+    neoInferenceEngine.listRuntimeHealth(),
+    db.listModels(),
+    modelRegistry.discoverCompatibleModels(),
+    db.listModelEvaluations(undefined, 15),
+    db.listTasks(undefined, { limit: 30 }),
+    db.listTools(),
+    db.listToolExecutions(undefined, 30),
+    db.listScheduledJobs(),
+    db.listEvolutionExperiments(25),
+    db.listTrainingJobs(undefined, 20),
+    db.listResearchReports('global', 15),
+    db.listKnowledgeSources('global', 25),
+    db.listEntities('global', { limit: 40 }),
+    db.listRelationships('global', undefined, 50),
+    getCapabilityRegistry(),
   ]);
 
   const repoIndex = indexWorkspaceCodebase();
 
   res.json({
-    providers: getConfiguredProviders(),
+    subsystems: getConfiguredSubsystems(),
+    capabilities: capabilities.modalities,
+    hardware,
+    runtimeHealth,
     lockState,
     tenants: tenants.map((t) => ({ ...t, webhook_secret: t.webhook_secret ? '********' : null })),
     apiKeys: apiKeys.map((k) => ({ ...k, key_hash: undefined })),
@@ -82,15 +122,30 @@ adminRouter.get('/overview', requireAdminConsoleAuth, async (_req, res) => {
     skills,
     streams,
     upgrades,
+    experiments,
+    trainingJobs,
     promotedModules: listPromotedModules(),
     dynamicApis,
     jobs,
+    scheduledJobs,
+    tasks,
+    tools: toolRegistry.toPublicRecords(dbTools),
+    toolExecutions,
+    models,
+    modelCompatibility,
+    evaluations,
+    researchReports,
+    knowledgeSources,
+    graph: {
+      entities: entities.map((e) => ({ ...e, embedding: undefined })),
+      relationships,
+    },
     telemetrySummary,
     auditLogs,
     repoSummary: {
       totalFiles: repoIndex.totalFiles,
       totalLines: repoIndex.totalLines,
-      topModules: repoIndex.files.slice(0, 10),
+      topModules: repoIndex.files.slice(0, 12),
     },
   });
 });
@@ -128,11 +183,37 @@ adminRouter.post('/keys', requireAdminConsoleAuth, async (req, res) => {
     metadata: { scopes: parsed.data.scopes },
   });
 
-  // Raw key is returned once on creation and never stored in plaintext
   res.status(201).json({
     rawKey,
     key: { ...record, key_hash: undefined },
   });
+});
+
+adminRouter.post('/keys/:id/rotate', requireAdminConsoleAuth, async (req, res) => {
+  const db = await getDb();
+  const existing = await db.getApiKeyById(String(req.params.id));
+  if (!existing || existing.revoked_at) return res.status(404).json({ error: 'Active API key not found' });
+
+  await db.revokeApiKey(existing.id);
+  const { rawKey, prefix, hash } = generateScopedApiKey();
+  const rotated = await db.createApiKey({
+    tenant_id: existing.tenant_id,
+    name: `${existing.name} (rotated)`,
+    key_prefix: prefix,
+    key_hash: hash,
+    scopes: existing.scopes,
+  });
+
+  await db.recordAuditLog({
+    tenant_id: existing.tenant_id,
+    actor: req.neoAuth!.actorLabel,
+    action: 'POST /api/admin/keys/:id/rotate',
+    resource: `key:${prefix}`,
+    status_code: 201,
+    metadata: { replacedKeyId: existing.id },
+  });
+
+  return res.status(201).json({ rawKey, key: { ...rotated, key_hash: undefined } });
 });
 
 adminRouter.delete('/keys/:id', requireAdminConsoleAuth, async (req, res) => {
@@ -183,7 +264,7 @@ adminRouter.patch('/tenants/:id', requireAdminConsoleAuth, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Invalid tenant update', issues: parsed.error.issues });
 
   if (parsed.data.webhook_url) {
-    const check = validateExternalUrl(parsed.data.webhook_url);
+    const check = await validateExternalUrlAsync(parsed.data.webhook_url);
     if (!check.valid) return res.status(400).json({ error: `Invalid webhook URL: ${check.reason}` });
   }
 
@@ -222,4 +303,28 @@ adminRouter.patch('/streams/:id', requireAdminConsoleAuth, async (req, res) => {
   const updated = await db.toggleTopicStream(String(req.params.id), Boolean(req.body?.enabled));
   if (!updated) return res.status(404).json({ error: 'Topic stream not found' });
   res.json({ stream: updated });
+});
+
+// Autonomous Scheduler management
+adminRouter.get('/scheduler', requireAdminConsoleAuth, async (_req, res) => {
+  const db = await getDb();
+  const jobs = await db.listScheduledJobs();
+  res.json({ jobs });
+});
+
+adminRouter.patch('/scheduler/:id', requireAdminConsoleAuth, async (req, res) => {
+  const db = await getDb();
+  const patch: { enabled?: boolean; interval_ms?: number } = {};
+  if (typeof req.body?.enabled === 'boolean') patch.enabled = req.body.enabled;
+  if (typeof req.body?.interval_ms === 'number' && req.body.interval_ms >= 30_000) {
+    patch.interval_ms = Math.round(req.body.interval_ms);
+  }
+  const updated = await db.updateScheduledJob(String(req.params.id), patch);
+  if (!updated) return res.status(404).json({ error: 'Scheduled job not found' });
+  return res.json({ job: updated });
+});
+
+adminRouter.post('/scheduler/tick', requireAdminConsoleAuth, async (req, res) => {
+  const result = await autonomousScheduler.tick(Boolean(req.body?.force));
+  res.json(result);
 });

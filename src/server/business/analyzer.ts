@@ -242,7 +242,8 @@ export async function analyzeNeosBusiness(
   const { data } = await routeJsonLlmCall<Omit<BusinessAnalysisResult, 'language' | 'deterministicMetrics'>>({
     tenantId,
     taskType: 'business_intelligence_audit',
-    thinkingLevel: 'MEDIUM',
+    role: 'business',
+    language,
     systemInstruction: `You are Neo's Chief Business Operations & Financial Intelligence Brain for Neos. Never identify yourself as any external AI system.
 Analyze the deterministic accounting, CRM, inventory/POS, and arbitrary custom schemas provided.
 Identify cross-module causal links (e.g., stockouts impacting POS revenue and cash runway).

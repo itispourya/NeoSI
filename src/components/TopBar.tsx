@@ -4,68 +4,66 @@ import type { NavSection } from '../types/neo';
 interface TopBarProps {
   section: NavSection;
   storageMode?: string;
+  runtimeDefault?: string;
   lockStatus?: string;
-  localOnlyMode?: boolean;
   loading: boolean;
   onRefresh: () => void;
   onOpenMobileNav: () => void;
 }
 
 const SECTION_TITLES: Record<NavSection, string> = {
-  overview: 'Overview & Telemetry',
-  knowledge: 'Knowledge Daemon & Memory',
-  upgrades: 'Safe Self-Upgrade Pipeline',
-  forge: 'Autonomous API Forge',
-  workbench: 'Neos Brain & Engineer',
-  security: 'Tenants, Keys & Security',
+  overview: 'System Overview & Hardware Telemetry',
+  tasks: 'Durable Autonomous Agent Runtime',
+  workbench: 'Cognitive Reasoning & Business Audit Lab',
+  memory: '7-Layer Memory, Knowledge Graph & Research',
+  models: 'Open-Weight Model Registry & Benchmarks',
+  tools: 'Standardized Tool Registry, MCP & API Forge',
+  evolution: '4-Layer Self-Evolution & Autonomous Scheduler',
+  security: 'Tenant Isolation, API Keys & Audit Trail',
 };
 
 export function TopBar({
   section,
   storageMode,
+  runtimeDefault,
   lockStatus,
-  localOnlyMode,
   loading,
   onRefresh,
   onOpenMobileNav,
 }: TopBarProps) {
   return (
-    <header className="h-14 border-b border-slate-800/80 bg-[#0B0F17] px-4 lg:px-8 flex items-center justify-between gap-8 shrink-0">
+    <header className="h-16 bg-[#0D131F] border-b border-slate-800 px-4 lg:px-8 flex items-center justify-between gap-4">
       <div className="flex items-center gap-3 min-w-0">
         <button
           type="button"
           onClick={onOpenMobileNav}
-          aria-label="Open navigation menu"
-          className="lg:hidden p-2 -ml-2 text-slate-400 hover:text-slate-100 rounded-md"
+          className="lg:hidden p-2 rounded border border-slate-800 text-slate-300 hover:bg-slate-800 shrink-0"
+          aria-label="Open menu"
         >
-          <Menu className="w-5 h-5" />
+          <Menu className="w-4 h-4" />
         </button>
-        <div className="flex items-center gap-2 text-sm min-w-0">
-          <span className="text-slate-500 whitespace-nowrap shrink-0">Neo</span>
-          <span className="text-slate-600" aria-hidden="true">/</span>
-          <h1 className="font-display font-semibold text-slate-100 truncate">
+        <div className="min-w-0">
+          <h1 className="font-display text-sm lg:text-base font-semibold text-slate-100 truncate">
             {SECTION_TITLES[section]}
           </h1>
         </div>
       </div>
 
-      <div className="hidden md:flex items-center gap-3 text-xs text-slate-400 whitespace-nowrap shrink-0">
-        <span>Mode: {localOnlyMode ? 'Sovereign Local' : 'Autonomous Hybrid'}</span>
-        {storageMode && <span aria-hidden="true">·</span>}
-        {storageMode && <span>Storage: {storageMode}</span>}
-        {storageMode && lockStatus && <span aria-hidden="true">·</span>}
-        {lockStatus && <span>Access: {lockStatus}</span>}
-      </div>
-
       <div className="flex items-center gap-3 shrink-0">
+        <div className="hidden md:flex items-center gap-3 text-[11px] font-mono text-slate-400">
+          <span>DB: {storageMode || '...'}</span>
+          <span>Runtime: {runtimeDefault || 'auto'}</span>
+          <span>Auth: {lockStatus || 'locked'}</span>
+        </div>
+
         <button
           type="button"
           onClick={onRefresh}
           disabled={loading}
-          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0"
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/70 hover:bg-slate-800 text-xs font-medium text-slate-200 whitespace-nowrap shrink-0 disabled:opacity-50"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          <span>{loading ? 'Syncing' : 'Refresh Data'}</span>
+          <span>Refresh</span>
         </button>
       </div>
     </header>

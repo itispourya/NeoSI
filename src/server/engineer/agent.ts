@@ -37,7 +37,7 @@ export async function runAutonomousEngineeringTask(req: EngineeringTaskRequest):
   const ragText = formatRagContextForPrompt(rag);
 
   let currentDraft: LlmEngineerOutput | null = null;
-  let lastReport: SandboxTestReport = { passed: 0, failed: 0, total: 0, durationMs: 0, details: [] };
+  let lastReport: SandboxTestReport = { passed: 0, failed: 0, total: 0, durationMs: 0, details: [], isolation: 'subprocess' };
   let iterations = 0;
   const maxIterations = 3;
 
@@ -51,7 +51,7 @@ export async function runAutonomousEngineeringTask(req: EngineeringTaskRequest):
     const { data } = await routeJsonLlmCall<LlmEngineerOutput>({
       tenantId,
       taskType: 'autonomous_engineer',
-      thinkingLevel: 'MEDIUM',
+      role: 'coding',
       systemInstruction: `You are Neo's Principal Autonomous Software Engineer.
 Follow the Plan -> Code -> Test -> Fix loop strictly.
 Write clean JavaScript ES5/ES2022 compatible pure logic for sandbox verification with an entry function \`function handle(input) { ... }\` (plus any helper functions) and deterministic unit tests using \`test(name, () => { assert.equal(...); })\` (where \`test\` and \`assert\` are provided in the sandbox).

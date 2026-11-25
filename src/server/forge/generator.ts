@@ -99,7 +99,7 @@ export async function forgeDynamicEndpoint(requirement: string, tenantId = 'glob
     const { data } = await routeJsonLlmCall<SynthesizedEndpointSpec>({
       tenantId,
       taskType: 'api_forge_synthesis',
-      thinkingLevel: 'LOW',
+      role: 'coding',
       systemInstruction: `You are Neo's Autonomous API Forge.
 Convert a natural-language endpoint requirement into a production-safe, typed, tested API endpoint.
 Rules:
@@ -155,9 +155,9 @@ Return strict JSON matching { "slug", "name", "description", "method": "POST", "
   return record;
 }
 
-export async function invokeDynamicEndpoint(slug: string, payload: unknown) {
+export async function invokeDynamicEndpoint(slug: string, payload: unknown, tenantId?: string) {
   const db = await getDb();
-  const api = await db.getDynamicApiBySlug(slug);
+  const api = await db.getDynamicApiBySlug(slug, tenantId);
   if (!api) {
     return { status: 404, body: { error: `Dynamic endpoint '/api/v1/custom/${slug}' not found` } };
   }

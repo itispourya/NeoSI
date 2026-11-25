@@ -1,4 +1,4 @@
-// Admin session token held strictly in JS memory (never localStorage/sessionStorage)
+// Admin session token held strictly in JS memory (never localStorage/sessionStorage or bypass headers)
 let inMemoryAdminToken: string | null = null;
 
 export function setAdminToken(token: string | null) {
@@ -12,7 +12,6 @@ export function getAdminToken(): string | null {
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-Neo-Console': '1',
     ...(init.headers as Record<string, string> | undefined),
   };
   if (inMemoryAdminToken && !headers.Authorization) {
@@ -29,8 +28,12 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
   if (!res.ok) {
     const errObj = data as { error?: string; authRequired?: boolean };
-    const err = new Error(errObj.error || `Request failed (${res.status})`) as Error & { authRequired?: boolean };
-    err.authRequired = errObj.authRequired;
+    const err = new Error(errObj.error || `Request failed (${res.status})`) as Error & {
+      authRequired?: boolean;
+      status?: number;
+    };
+    err.authRequired = errObj.authRequired || res.status === 401;
+    err.status = res.status;
     throw err;
   }
   return data as T;
@@ -39,12 +42,13 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 export async function streamChat(
   body: {
     message: string;
+    conversationId?: string;
     language?: string;
     mode?: 'neural' | 'sovereign-local';
     workspaceContext?: Record<string, unknown>;
   },
   handlers: {
-    onMeta?: (meta: { language: string; ragMatches: number; piiRedacted: boolean; engine?: string }) => void;
+    onMeta?: (meta: { conversationId?: string; language: string; ragMatches: number; piiRedacted: boolean; engine?: string }) => void;
     onDelta: (chunk: string) => void;
     onDone?: (meta: Record<string, unknown>) => void;
     onError: (msg: string) => void;
@@ -52,7 +56,6 @@ export async function streamChat(
 ) {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-Neo-Console': '1',
   };
   if (inMemoryAdminToken) {
     headers.Authorization = `Bearer ${inMemoryAdminToken}`;
