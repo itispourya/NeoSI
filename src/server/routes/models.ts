@@ -61,7 +61,7 @@ modelsRouter.post('/models/install', requireApiGatewayAuth('admin'), async (req,
   return res.status(result.ok ? 200 : 400).json(result);
 });
 
-modelsRouter.post('/models/evaluate', requireApiGatewayAuth('write'), async (req, res) => {
+modelsRouter.post('/models/evaluate', requireApiGatewayAuth('admin'), async (req, res) => {
   const modelId = String(req.body?.modelId || 'neo-embedded-core-v1');
   const evaluation = await runModelBenchmarkSuite(modelId);
   return res.json({ evaluation });
@@ -84,4 +84,21 @@ modelsRouter.post('/models/rollback', requireApiGatewayAuth('admin'), async (req
   const deployment = await modelRegistry.rollbackModel(role);
   if (!deployment) return res.status(404).json({ error: 'No rollback target model found' });
   return res.json({ deployment });
+});
+
+modelsRouter.post('/models/:id/verify', requireApiGatewayAuth('admin'), async (req, res) => {
+  const result = await modelRegistry.verifyModelReady(String(req.params.id));
+  return res.status(result.ready ? 200 : 409).json(result);
+});
+
+modelsRouter.delete('/models/:id', requireApiGatewayAuth('admin'), async (req, res) => {
+  const db = await getDb();
+  const model = await db.getModelById(String(req.params.id));
+  if (!model) return res.status(404).json({ error: 'Model not found' });
+  if (model.deployment_status === 'active') {
+    return res.status(409).json({ error: 'An active model cannot be deleted. Roll it back or deactivate it first.' });
+  }
+  const deleted = await modelRegistry.deleteModel(model.id);
+  if (!deleted) return res.status(409).json({ error: 'Model could not be deleted.' });
+  return res.status(204).end();
 });
