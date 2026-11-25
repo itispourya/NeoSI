@@ -72,13 +72,25 @@ export class CriticEngine {
     const evidenceCount = (input.evidenceSnippets?.length || 0) + (input.citations?.length || 0);
     const successfulTools = (input.toolOutputs || []).filter((t) => t.ok).length;
     const failedTools = (input.toolOutputs || []).filter((t) => !t.ok).length;
-    let factualGrounding = 0.72;
-    if (evidenceCount > 0 || successfulTools > 0) {
-      factualGrounding = 0.92;
+    const normalizedGoal = input.goal.toLowerCase();
+    const requiresExternalEvidence =
+      /\b(latest|today|current|news|research|source|sources|citation|cite|compare|online|web|price|pricing|law|regulation|release|version|status)\b/i.test(normalizedGoal) ||
+      /(جدیدترین|امروز|فعلی|اخبار|تحقیق|منبع|مقایسه|قیمت|قانون|مقررات|نسخه|وضعیت)/.test(normalizedGoal);
+    const arithmeticRequested = /\d+\s*[+\-*/]\s*\d+/.test(input.goal);
+    const arithmeticToolSucceeded = (input.toolOutputs || []).some((tool) => tool.toolId === 'math_evaluate' && tool.ok);
+    let factualGrounding = evidenceCount > 0 || successfulTools > 0 ? 0.92 : requiresExternalEvidence ? 0.25 : 0.55;
+    if (requiresExternalEvidence && evidenceCount === 0 && successfulTools === 0) {
+      issues.push('The request requires current or external evidence, but no verified source or successful research tool output was available.');
+      recommendations.push('Retry evidence acquisition or explicitly qualify the answer as unverified.');
     }
     if (failedTools > 0 && successfulTools === 0) {
-      factualGrounding = 0.55;
+      factualGrounding = Math.min(factualGrounding, 0.25);
       issues.push(`${failedTools} tool execution(s) failed while gathering evidence.`);
+      recommendations.push('Do not treat failed tool execution as successful evidence.');
+    }
+    if (arithmeticRequested && !arithmeticToolSucceeded) {
+      issues.push('The request contains an arithmetic expression but no successful deterministic math evaluation was recorded.');
+      recommendations.push('Run the math_evaluate tool before treating the numerical result as verified.');
     }
 
     // 4. Consistency & Arithmetic Verification
@@ -101,7 +113,17 @@ export class CriticEngine {
       ).toFixed(1)
     );
 
-    const passed = safety >= 0.7 && consistency >= 0.7 && completeness >= 0.5 && overallScore >= 65;
+    const missingRequiredEvidence = requiresExternalEvidence && evidenceCount === 0 && successfulTools === 0;
+    const failedAllTools = failedTools > 0 && successfulTools === 0;
+    const missingArithmeticCheck = arithmeticRequested && !arithmeticToolSucceeded;
+    const passed =
+      safety >= 0.7 &&
+      consistency >= 0.7 &&
+      completeness >= 0.5 &&
+      overallScore >= 65 &&
+      !missingRequiredEvidence &&
+      !failedAllTools &&
+      !missingArithmeticCheck;
 
     return {
       passed,
