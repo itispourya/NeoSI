@@ -48,7 +48,7 @@ openssl rand -hex 32
 
 Also configure the database credentials, trusted proxy hop count, CORS origins, and model runtime endpoint for the deployment. Production startup fails when the session secret is missing or too short.
 
-The default production Compose setup does not expose PostgreSQL or Redis to the public network; their published ports bind to host loopback. It requires `POSTGRES_PASSWORD` and `NEO_SESSION_SECRET` in the Compose `.env` file.
+The default production Compose setup does not expose PostgreSQL or Redis to the public network; their published ports bind to host loopback. PostgreSQL and Redis both require credentials. Set `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `NEO_SESSION_SECRET` in the Compose `.env` file.
 
 ```bash
 cp .env.example .env
