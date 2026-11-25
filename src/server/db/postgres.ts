@@ -15,6 +15,7 @@ import type {
   BackgroundJobRecord,
   ConversationRecord,
   DynamicApiRecord,
+  EpistemicStatus,
   EvolutionExperimentRecord,
   GraphEntityRecord,
   GraphRelationshipRecord,
@@ -24,7 +25,10 @@ import type {
   MessageRecord,
   ModelEvaluationRecord,
   ModelRecord,
+  ObjectiveRecord,
+  ObjectiveStatus,
   ResearchReportRecord,
+  RetentionPolicy,
   ScheduledJobRecord,
   SelfUpgradeRecord,
   SkillRecord,
@@ -56,7 +60,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
   }
 
   async init(): Promise<void> {
-    for (const file of ['001_init.sql', '002_neo_cognitive_core.sql']) {
+    for (const file of ['001_init.sql', '002_neo_cognitive_core.sql', '003_neo_upgrade.sql']) {
       const migrationPath = path.resolve(process.cwd(), 'migrations', file);
       if (fs.existsSync(migrationPath)) {
         const sql = fs.readFileSync(migrationPath, 'utf8');
@@ -173,10 +177,12 @@ export class PostgresNeoDatabase implements NeoDatabase {
   // --- Memories ---
   async insertMemory(input: Parameters<NeoDatabase['insertMemory']>[0]): Promise<MemoryRecord> {
     const id = uuidv4();
-    const vecLiteral = `[${input.embedding.join(',')}]`;
+    const embModel = input.embedding_model || 'neo-embed-local-v2';
+    const embDim = input.embedding_dim ?? input.embedding.length;
+    const vecLiteral = embDim === 768 ? `[${input.embedding.join(',')}]` : null;
     const { rows } = await this.pool.query(
-      `INSERT INTO memories (id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, valid_from, valid_to, superseded_by, version, embedding)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::vector) RETURNING *`,
+      `INSERT INTO memories (id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, embedding, embedding_model, embedding_dim)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::vector, $20, $21) RETURNING *`,
       [
         id,
         input.tenant_id,
@@ -190,11 +196,15 @@ export class PostgresNeoDatabase implements NeoDatabase {
         input.freshness_score ?? 1.0,
         input.importance_score ?? 0.6,
         input.confidence_score ?? 0.8,
+        input.epistemic_status ?? ('observation' as EpistemicStatus),
+        input.retention_policy ?? ('long_term' as RetentionPolicy),
         input.valid_from ?? new Date().toISOString(),
         input.valid_to ?? null,
         input.superseded_by ?? null,
         input.version ?? 1,
         vecLiteral,
+        embModel,
+        embDim,
       ]
     );
     return { ...rows[0], embedding: input.embedding };
@@ -203,11 +213,11 @@ export class PostgresNeoDatabase implements NeoDatabase {
   async getMemoryById(id: string, tenantId: string, includeGlobal = false): Promise<MemoryRecord | null> {
     const { rows } = includeGlobal
       ? await this.pool.query(
-          `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, created_at FROM memories WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'global') AND deleted_at IS NULL`,
+          `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding_model, embedding_dim, created_at FROM memories WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'global') AND deleted_at IS NULL`,
           [id, tenantId]
         )
       : await this.pool.query(
-          `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, created_at FROM memories WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+          `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding_model, embedding_dim, created_at FROM memories WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
           [id, tenantId]
         );
     return rows[0] ? { ...rows[0], embedding: [] } : null;
@@ -216,9 +226,14 @@ export class PostgresNeoDatabase implements NeoDatabase {
   async updateMemory(id: string, tenantId: string, patch: Parameters<NeoDatabase['updateMemory']>[2]): Promise<MemoryRecord | null> {
     const existing = await this.getMemoryById(id, tenantId, false);
     if (!existing) return null;
-    const merged = { ...existing, ...patch, version: existing.version + 1 };
+    const merged = {
+      ...existing,
+      ...patch,
+      embedding_dim: patch.embedding_dim ?? (patch.embedding ? patch.embedding.length : existing.embedding_dim),
+      version: existing.version + 1,
+    };
     const { rows } = await this.pool.query(
-      `UPDATE memories SET title = $1, content = $2, topic = $3, structured_facts = $4, reliability_score = $5, freshness_score = $6, importance_score = $7, confidence_score = $8, valid_from = $9, valid_to = $10, superseded_by = $11, version = $12 WHERE id = $13 AND tenant_id = $14 RETURNING *`,
+      `UPDATE memories SET title = $1, content = $2, topic = $3, structured_facts = $4, reliability_score = $5, freshness_score = $6, importance_score = $7, confidence_score = $8, epistemic_status = $9, retention_policy = $10, valid_from = $11, valid_to = $12, superseded_by = $13, version = $14, embedding_model = $15, embedding_dim = $16 WHERE id = $17 AND tenant_id = $18 RETURNING *`,
       [
         merged.title,
         merged.content,
@@ -228,10 +243,14 @@ export class PostgresNeoDatabase implements NeoDatabase {
         merged.freshness_score,
         merged.importance_score,
         merged.confidence_score,
+        merged.epistemic_status,
+        merged.retention_policy,
         merged.valid_from,
         merged.valid_to,
         merged.superseded_by,
         merged.version,
+        merged.embedding_model,
+        merged.embedding_dim,
         id,
         tenantId,
       ]
@@ -272,17 +291,18 @@ export class PostgresNeoDatabase implements NeoDatabase {
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     params.push(opts?.limit ?? 50, opts?.offset ?? 0);
     const { rows } = await this.pool.query(
-      `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, created_at FROM memories ${where} ORDER BY created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+      `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding_model, embedding_dim, created_at FROM memories ${where} ORDER BY created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
       params
     );
     return rows.map((r) => ({ ...r, embedding: [] }));
   }
 
   async searchMemories(queryEmbedding: number[], opts?: MemorySearchOptions): Promise<MemorySearchResult[]> {
-    const vecLiteral = `[${queryEmbedding.join(',')}]`;
-    const clauses: string[] = ['embedding IS NOT NULL', 'deleted_at IS NULL'];
-    const params: unknown[] = [vecLiteral];
-    let idx = 2;
+    const queryModel = opts?.queryEmbeddingModel;
+    const canVector = queryEmbedding.length === 768;
+    const clauses: string[] = ['deleted_at IS NULL'];
+    const params: unknown[] = [];
+    let idx = 1;
     if (opts?.memoryType) {
       clauses.push(`memory_type = $${idx++}`);
       params.push(opts.memoryType);
@@ -296,14 +316,36 @@ export class PostgresNeoDatabase implements NeoDatabase {
         params.push(opts.tenantId);
       }
     }
-    params.push(100);
-    const { rows } = await this.pool.query(
-      `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, created_at,
-       1 - (embedding <=> $1::vector) AS similarity
-       FROM memories WHERE ${clauses.join(' AND ')}
-       ORDER BY similarity DESC LIMIT $${idx}`,
-      params
-    );
+
+    let rows: Record<string, unknown>[];
+    if (canVector) {
+      const vecLiteral = `[${queryEmbedding.join(',')}]`;
+      params.unshift(vecLiteral);
+      // Re-index existing $ placeholders by +1
+      const shiftedClauses = clauses.map((c) => c.replace(/\$(\d+)/g, (_, n) => `$${Number(n) + 1}`));
+      const nextIdx = idx + 1;
+      const modelCheck = queryModel ? `embedding_model = $${nextIdx}` : 'TRUE';
+      if (queryModel) params.push(queryModel);
+      const limitIdx = params.length + 1;
+      params.push(150);
+      const res = await this.pool.query(
+        `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding_model, embedding_dim, created_at,
+         CASE WHEN embedding IS NOT NULL AND embedding_dim = 768 AND ${modelCheck} THEN 1 - (embedding <=> $1::vector) ELSE 0 END AS similarity
+         FROM memories WHERE ${shiftedClauses.join(' AND ')}
+         ORDER BY similarity DESC, created_at DESC LIMIT $${limitIdx}`,
+        params
+      );
+      rows = res.rows;
+    } else {
+      params.push(150);
+      const res = await this.pool.query(
+        `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding_model, embedding_dim, created_at, 0 AS similarity
+         FROM memories WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC LIMIT $${idx}`,
+        params
+      );
+      rows = res.rows;
+    }
+
     if (rows.length === 0) return [];
     const bm25 = opts?.queryText
       ? computeBm25Scores(
@@ -322,7 +364,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
       }))
     );
     const minScore = opts?.minScore ?? 0.04;
-    return ranked.filter((m) => m.similarity >= minScore || m.hybridScore >= minScore + 0.15).slice(0, opts?.limit ?? 8);
+    return ranked.filter((m) => m.similarity >= minScore || m.hybridScore >= minScore + 0.08).slice(0, opts?.limit ?? 8);
   }
 
   async countMemories(tenantId?: string): Promise<MemoryCounts> {
@@ -606,6 +648,85 @@ export class PostgresNeoDatabase implements NeoDatabase {
     return rows;
   }
 
+  // --- Autonomous Objectives ---
+  async createObjective(input: Omit<ObjectiveRecord, 'id' | 'created_at' | 'updated_at'>): Promise<ObjectiveRecord> {
+    const { rows } = await this.pool.query(
+      `INSERT INTO objectives (id, tenant_id, title, description, category, priority_score, value_score, urgency_score, uncertainty_score, progress_pct, status, success_criteria, compute_budget_ms, compute_used_ms, linked_task_ids, linked_research_ids, knowledge_gaps, last_evaluated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
+      [
+        uuidv4(),
+        input.tenant_id,
+        input.title,
+        input.description,
+        input.category,
+        input.priority_score,
+        input.value_score,
+        input.urgency_score,
+        input.uncertainty_score,
+        input.progress_pct,
+        input.status,
+        input.success_criteria,
+        input.compute_budget_ms,
+        input.compute_used_ms,
+        JSON.stringify(input.linked_task_ids),
+        JSON.stringify(input.linked_research_ids),
+        JSON.stringify(input.knowledge_gaps),
+        input.last_evaluated_at,
+      ]
+    );
+    return rows[0];
+  }
+
+  async getObjectiveById(id: string, tenantId: string): Promise<ObjectiveRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM objectives WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+    return rows[0] || null;
+  }
+
+  async listObjectives(tenantId?: string, opts?: { status?: ObjectiveStatus; limit?: number }): Promise<ObjectiveRecord[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    let idx = 1;
+    if (tenantId) {
+      clauses.push(`tenant_id = $${idx++}`);
+      params.push(tenantId);
+    }
+    if (opts?.status) {
+      clauses.push(`status = $${idx++}`);
+      params.push(opts.status);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    params.push(opts?.limit ?? 50);
+    const { rows } = await this.pool.query(`SELECT * FROM objectives ${where} ORDER BY priority_score DESC, updated_at DESC LIMIT $${idx}`, params);
+    return rows;
+  }
+
+  async updateObjective(id: string, tenantId: string, patch: Parameters<NeoDatabase['updateObjective']>[2]): Promise<ObjectiveRecord | null> {
+    const existing = await this.getObjectiveById(id, tenantId);
+    if (!existing) return null;
+    const merged = { ...existing, ...patch };
+    const { rows } = await this.pool.query(
+      `UPDATE objectives SET title = $1, description = $2, priority_score = $3, value_score = $4, urgency_score = $5, uncertainty_score = $6, progress_pct = $7, status = $8, compute_used_ms = $9, linked_task_ids = $10, linked_research_ids = $11, knowledge_gaps = $12, last_evaluated_at = $13, updated_at = NOW() WHERE id = $14 AND tenant_id = $15 RETURNING *`,
+      [
+        merged.title,
+        merged.description,
+        merged.priority_score,
+        merged.value_score,
+        merged.urgency_score,
+        merged.uncertainty_score,
+        merged.progress_pct,
+        merged.status,
+        merged.compute_used_ms,
+        JSON.stringify(merged.linked_task_ids),
+        JSON.stringify(merged.linked_research_ids),
+        JSON.stringify(merged.knowledge_gaps),
+        merged.last_evaluated_at,
+        id,
+        tenantId,
+      ]
+    );
+    return rows[0] || null;
+  }
+
   // --- Tools ---
   async listTools(): Promise<ToolRecord[]> {
     const { rows } = await this.pool.query('SELECT * FROM tools ORDER BY name ASC');
@@ -709,6 +830,11 @@ export class PostgresNeoDatabase implements NeoDatabase {
       ]
     );
     return rows[0] || null;
+  }
+
+  async deleteModel(id: string): Promise<boolean> {
+    const res = await this.pool.query('DELETE FROM models WHERE id = $1', [id]);
+    return (res.rowCount ?? 0) > 0;
   }
 
   async recordModelEvaluation(input: Omit<ModelEvaluationRecord, 'id' | 'created_at'>): Promise<ModelEvaluationRecord> {

@@ -15,6 +15,7 @@ import type {
   BackgroundJobRecord,
   ConversationRecord,
   DynamicApiRecord,
+  EpistemicStatus,
   EvolutionExperimentRecord,
   GraphEntityRecord,
   GraphRelationshipRecord,
@@ -24,7 +25,10 @@ import type {
   MessageRecord,
   ModelEvaluationRecord,
   ModelRecord,
+  ObjectiveRecord,
+  ObjectiveStatus,
   ResearchReportRecord,
+  RetentionPolicy,
   ScheduledJobRecord,
   SelfUpgradeRecord,
   SkillRecord,
@@ -73,17 +77,30 @@ export class SqliteNeoDatabase implements NeoDatabase {
     const additions: Array<[string, string]> = [
       ['importance_score', 'REAL NOT NULL DEFAULT 0.6'],
       ['confidence_score', 'REAL NOT NULL DEFAULT 0.8'],
+      ['epistemic_status', `TEXT NOT NULL DEFAULT 'observation'`],
+      ['retention_policy', `TEXT NOT NULL DEFAULT 'long_term'`],
       ['valid_from', 'TEXT'],
       ['valid_to', 'TEXT'],
       ['superseded_by', 'TEXT'],
       ['version', 'INTEGER NOT NULL DEFAULT 1'],
       ['deleted_at', 'TEXT'],
       ['last_accessed_at', 'TEXT'],
+      ['embedding_model', `TEXT NOT NULL DEFAULT 'neo-embed-local-v2'`],
+      ['embedding_dim', 'INTEGER NOT NULL DEFAULT 768'],
     ];
     for (const [col, def] of additions) {
       if (!existing.has(col)) {
         this.db.exec(`ALTER TABLE memories ADD COLUMN ${col} ${def};`);
       }
+    }
+
+    const entityCols = this.db.prepare(`PRAGMA table_info(entities)`).all() as Array<{ name: string }>;
+    const existingEntity = new Set(entityCols.map((c) => c.name));
+    if (!existingEntity.has('embedding_model')) {
+      this.db.exec(`ALTER TABLE entities ADD COLUMN embedding_model TEXT NOT NULL DEFAULT 'neo-embed-local-v2';`);
+    }
+    if (!existingEntity.has('embedding_dim')) {
+      this.db.exec(`ALTER TABLE entities ADD COLUMN embedding_dim INTEGER NOT NULL DEFAULT 768;`);
     }
   }
 
@@ -152,6 +169,8 @@ export class SqliteNeoDatabase implements NeoDatabase {
         freshness_score REAL NOT NULL DEFAULT 1.0,
         importance_score REAL NOT NULL DEFAULT 0.6,
         confidence_score REAL NOT NULL DEFAULT 0.8,
+        epistemic_status TEXT NOT NULL DEFAULT 'observation',
+        retention_policy TEXT NOT NULL DEFAULT 'long_term',
         valid_from TEXT,
         valid_to TEXT,
         superseded_by TEXT,
@@ -159,6 +178,8 @@ export class SqliteNeoDatabase implements NeoDatabase {
         deleted_at TEXT,
         last_accessed_at TEXT,
         embedding TEXT NOT NULL,
+        embedding_model TEXT NOT NULL DEFAULT 'neo-embed-local-v2',
+        embedding_dim INTEGER NOT NULL DEFAULT 768,
         created_at TEXT NOT NULL
       );
 
@@ -224,6 +245,8 @@ export class SqliteNeoDatabase implements NeoDatabase {
         attributes TEXT NOT NULL DEFAULT '{}',
         confidence REAL NOT NULL DEFAULT 0.8,
         embedding TEXT NOT NULL DEFAULT '[]',
+        embedding_model TEXT NOT NULL DEFAULT 'neo-embed-local-v2',
+        embedding_dim INTEGER NOT NULL DEFAULT 768,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -482,11 +505,35 @@ export class SqliteNeoDatabase implements NeoDatabase {
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS objectives (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL DEFAULT 'global',
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'general',
+        priority_score REAL NOT NULL DEFAULT 0.5,
+        value_score REAL NOT NULL DEFAULT 0.6,
+        urgency_score REAL NOT NULL DEFAULT 0.5,
+        uncertainty_score REAL NOT NULL DEFAULT 0.4,
+        progress_pct REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'active',
+        success_criteria TEXT NOT NULL DEFAULT '',
+        compute_budget_ms INTEGER NOT NULL DEFAULT 30000,
+        compute_used_ms INTEGER NOT NULL DEFAULT 0,
+        linked_task_ids TEXT NOT NULL DEFAULT '[]',
+        linked_research_ids TEXT NOT NULL DEFAULT '[]',
+        knowledge_gaps TEXT NOT NULL DEFAULT '[]',
+        last_evaluated_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
     this.ensureMemoryColumns();
     const now = new Date().toISOString();
     this.db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`).run('001_init', now);
     this.db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`).run('002_neo_cognitive_core', now);
+    this.db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`).run('003_neo_upgrade', now);
     await seedInitialData(this);
   }
 
@@ -600,10 +647,15 @@ export class SqliteNeoDatabase implements NeoDatabase {
 
   // --- Memories ---
   private mapMemoryRow(r: Record<string, unknown>): MemoryRecord {
+    const embedding = parseJson<number[]>(r.embedding, []);
     return {
       ...(r as unknown as MemoryRecord),
       structured_facts: parseJson<Record<string, unknown>>(r.structured_facts, {}),
-      embedding: parseJson<number[]>(r.embedding, []),
+      embedding,
+      embedding_model: typeof r.embedding_model === 'string' && r.embedding_model ? r.embedding_model : 'neo-embed-local-v2',
+      embedding_dim: Number(r.embedding_dim || embedding.length || 768),
+      epistemic_status: (r.epistemic_status as EpistemicStatus) || 'observation',
+      retention_policy: (r.retention_policy as RetentionPolicy) || 'long_term',
       importance_score: Number(r.importance_score ?? 0.6),
       confidence_score: Number(r.confidence_score ?? 0.8),
       version: Number(r.version ?? 1),
@@ -612,6 +664,8 @@ export class SqliteNeoDatabase implements NeoDatabase {
 
   async insertMemory(input: Parameters<NeoDatabase['insertMemory']>[0]): Promise<MemoryRecord> {
     const now = new Date().toISOString();
+    const embDim = input.embedding_dim ?? input.embedding.length;
+    const embModel = input.embedding_model || 'neo-embed-local-v2';
     const rec: MemoryRecord = {
       id: uuidv4(),
       tenant_id: input.tenant_id,
@@ -625,6 +679,8 @@ export class SqliteNeoDatabase implements NeoDatabase {
       freshness_score: input.freshness_score ?? 1.0,
       importance_score: input.importance_score ?? 0.6,
       confidence_score: input.confidence_score ?? 0.8,
+      epistemic_status: input.epistemic_status ?? 'observation',
+      retention_policy: input.retention_policy ?? 'long_term',
       valid_from: input.valid_from ?? now,
       valid_to: input.valid_to ?? null,
       superseded_by: input.superseded_by ?? null,
@@ -632,12 +688,14 @@ export class SqliteNeoDatabase implements NeoDatabase {
       deleted_at: input.deleted_at ?? null,
       last_accessed_at: input.last_accessed_at ?? null,
       embedding: input.embedding,
+      embedding_model: embModel,
+      embedding_dim: embDim,
       created_at: now,
     };
     this.db
       .prepare(
-        `INSERT INTO memories (id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO memories (id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding, embedding_model, embedding_dim, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         rec.id,
@@ -652,6 +710,8 @@ export class SqliteNeoDatabase implements NeoDatabase {
         rec.freshness_score,
         rec.importance_score,
         rec.confidence_score,
+        rec.epistemic_status,
+        rec.retention_policy,
         rec.valid_from,
         rec.valid_to,
         rec.superseded_by,
@@ -659,6 +719,8 @@ export class SqliteNeoDatabase implements NeoDatabase {
         rec.deleted_at,
         rec.last_accessed_at,
         JSON.stringify(rec.embedding),
+        rec.embedding_model,
+        rec.embedding_dim,
         rec.created_at
       );
     return rec;
@@ -674,23 +736,19 @@ export class SqliteNeoDatabase implements NeoDatabase {
   async updateMemory(
     id: string,
     tenantId: string,
-    patch: Partial<
-      Pick<
-        MemoryRecord,
-        'title' | 'content' | 'topic' | 'structured_facts' | 'reliability_score' | 'freshness_score' | 'importance_score' | 'confidence_score' | 'valid_from' | 'valid_to' | 'superseded_by' | 'embedding'
-      >
-    >
+    patch: Parameters<NeoDatabase['updateMemory']>[2]
   ): Promise<MemoryRecord | null> {
     const existing = await this.getMemoryById(id, tenantId, false);
     if (!existing) return null;
     const merged: MemoryRecord = {
       ...existing,
       ...patch,
+      embedding_dim: patch.embedding_dim ?? (patch.embedding ? patch.embedding.length : existing.embedding_dim),
       version: existing.version + 1,
     };
     this.db
       .prepare(
-        `UPDATE memories SET title = ?, content = ?, topic = ?, structured_facts = ?, reliability_score = ?, freshness_score = ?, importance_score = ?, confidence_score = ?, valid_from = ?, valid_to = ?, superseded_by = ?, version = ?, embedding = ? WHERE id = ? AND tenant_id = ?`
+        `UPDATE memories SET title = ?, content = ?, topic = ?, structured_facts = ?, reliability_score = ?, freshness_score = ?, importance_score = ?, confidence_score = ?, epistemic_status = ?, retention_policy = ?, valid_from = ?, valid_to = ?, superseded_by = ?, version = ?, embedding = ?, embedding_model = ?, embedding_dim = ? WHERE id = ? AND tenant_id = ?`
       )
       .run(
         merged.title,
@@ -701,11 +759,15 @@ export class SqliteNeoDatabase implements NeoDatabase {
         merged.freshness_score,
         merged.importance_score,
         merged.confidence_score,
+        merged.epistemic_status,
+        merged.retention_policy,
         merged.valid_from,
         merged.valid_to,
         merged.superseded_by,
         merged.version,
         JSON.stringify(merged.embedding),
+        merged.embedding_model,
+        merged.embedding_dim,
         id,
         tenantId
       );
@@ -770,18 +832,25 @@ export class SqliteNeoDatabase implements NeoDatabase {
         )
       : candidates.map(() => 0);
 
+    const queryModel = opts?.queryEmbeddingModel;
     const ranked = hybridRerank(
-      candidates.map((m, idx) => ({
-        item: m,
-        vectorScore: cosineSimilarity(queryEmbedding, m.embedding),
-        lexicalScore: bm25[idx] || 0,
-        reliability: m.reliability_score,
-        importance: m.importance_score,
-        freshness: m.freshness_score * computeTemporalDecay(m.created_at),
-      }))
+      candidates.map((m, idx) => {
+        const spaceMatches =
+          queryEmbedding.length > 0 &&
+          m.embedding.length === queryEmbedding.length &&
+          (!queryModel || m.embedding_model === queryModel);
+        return {
+          item: m,
+          vectorScore: spaceMatches ? cosineSimilarity(queryEmbedding, m.embedding) : 0,
+          lexicalScore: bm25[idx] || 0,
+          reliability: m.reliability_score,
+          importance: m.importance_score,
+          freshness: m.freshness_score * computeTemporalDecay(m.created_at),
+        };
+      })
     );
 
-    const filtered = ranked.filter((m) => m.similarity >= minScore || m.hybridScore >= minScore + 0.15).slice(0, opts?.limit ?? 8);
+    const filtered = ranked.filter((m) => m.similarity >= minScore || m.hybridScore >= minScore + 0.08).slice(0, opts?.limit ?? 8);
     const now = new Date().toISOString();
     for (const hit of filtered) {
       this.db.prepare('UPDATE memories SET last_accessed_at = ? WHERE id = ?').run(now, hit.id);
@@ -1007,6 +1076,8 @@ export class SqliteNeoDatabase implements NeoDatabase {
   // --- Knowledge Graph ---
   async upsertEntity(input: Omit<GraphEntityRecord, 'id' | 'created_at' | 'updated_at'>): Promise<GraphEntityRecord> {
     const now = new Date().toISOString();
+    const embModel = input.embedding_model || 'neo-embed-local-v2';
+    const embDim = input.embedding_dim ?? input.embedding.length;
     const existing = this.db
       .prepare('SELECT * FROM entities WHERE tenant_id = ? AND lower(name) = lower(?) AND entity_type = ?')
       .get(input.tenant_id, input.name, input.entity_type) as Record<string, unknown> | undefined;
@@ -1014,8 +1085,17 @@ export class SqliteNeoDatabase implements NeoDatabase {
       const mergedAliases = Array.from(new Set([...parseJson<string[]>(existing.aliases, []), ...input.aliases]));
       const mergedAttrs = { ...parseJson<Record<string, unknown>>(existing.attributes, {}), ...input.attributes };
       this.db
-        .prepare('UPDATE entities SET aliases = ?, attributes = ?, confidence = ?, embedding = ?, updated_at = ? WHERE id = ?')
-        .run(JSON.stringify(mergedAliases), JSON.stringify(mergedAttrs), Math.max(Number(existing.confidence || 0), input.confidence), JSON.stringify(input.embedding), now, String(existing.id));
+        .prepare('UPDATE entities SET aliases = ?, attributes = ?, confidence = ?, embedding = ?, embedding_model = ?, embedding_dim = ?, updated_at = ? WHERE id = ?')
+        .run(
+          JSON.stringify(mergedAliases),
+          JSON.stringify(mergedAttrs),
+          Math.max(Number(existing.confidence || 0), input.confidence),
+          JSON.stringify(input.embedding),
+          embModel,
+          embDim,
+          now,
+          String(existing.id)
+        );
       return {
         id: String(existing.id),
         tenant_id: input.tenant_id,
@@ -1025,14 +1105,16 @@ export class SqliteNeoDatabase implements NeoDatabase {
         attributes: mergedAttrs,
         confidence: Math.max(Number(existing.confidence || 0), input.confidence),
         embedding: input.embedding,
+        embedding_model: embModel,
+        embedding_dim: embDim,
         created_at: String(existing.created_at),
         updated_at: now,
       };
     }
-    const rec: GraphEntityRecord = { ...input, id: uuidv4(), created_at: now, updated_at: now };
+    const rec: GraphEntityRecord = { ...input, embedding_model: embModel, embedding_dim: embDim, id: uuidv4(), created_at: now, updated_at: now };
     this.db
-      .prepare(`INSERT INTO entities (id, tenant_id, name, entity_type, aliases, attributes, confidence, embedding, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(rec.id, rec.tenant_id, rec.name, rec.entity_type, JSON.stringify(rec.aliases), JSON.stringify(rec.attributes), rec.confidence, JSON.stringify(rec.embedding), rec.created_at, rec.updated_at);
+      .prepare(`INSERT INTO entities (id, tenant_id, name, entity_type, aliases, attributes, confidence, embedding, embedding_model, embedding_dim, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(rec.id, rec.tenant_id, rec.name, rec.entity_type, JSON.stringify(rec.aliases), JSON.stringify(rec.attributes), rec.confidence, JSON.stringify(rec.embedding), embModel, embDim, rec.created_at, rec.updated_at);
     return rec;
   }
 
@@ -1273,6 +1355,113 @@ export class SqliteNeoDatabase implements NeoDatabase {
     return rows.map((r) => ({ ...(r as unknown as TaskEventRecord), payload: parseJson(r.payload, {}) }));
   }
 
+  // --- Autonomous Objectives ---
+  private mapObjectiveRow(r: Record<string, unknown>): ObjectiveRecord {
+    return {
+      ...(r as unknown as ObjectiveRecord),
+      priority_score: Number(r.priority_score ?? 0.5),
+      value_score: Number(r.value_score ?? 0.6),
+      urgency_score: Number(r.urgency_score ?? 0.5),
+      uncertainty_score: Number(r.uncertainty_score ?? 0.4),
+      progress_pct: Number(r.progress_pct ?? 0),
+      compute_budget_ms: Number(r.compute_budget_ms ?? 30000),
+      compute_used_ms: Number(r.compute_used_ms ?? 0),
+      linked_task_ids: parseJson(r.linked_task_ids, []),
+      linked_research_ids: parseJson(r.linked_research_ids, []),
+      knowledge_gaps: parseJson(r.knowledge_gaps, []),
+    };
+  }
+
+  async createObjective(input: Omit<ObjectiveRecord, 'id' | 'created_at' | 'updated_at'>): Promise<ObjectiveRecord> {
+    const now = new Date().toISOString();
+    const rec: ObjectiveRecord = { ...input, id: uuidv4(), created_at: now, updated_at: now };
+    this.db
+      .prepare(
+        `INSERT INTO objectives (id, tenant_id, title, description, category, priority_score, value_score, urgency_score, uncertainty_score, progress_pct, status, success_criteria, compute_budget_ms, compute_used_ms, linked_task_ids, linked_research_ids, knowledge_gaps, last_evaluated_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        rec.id,
+        rec.tenant_id,
+        rec.title,
+        rec.description,
+        rec.category,
+        rec.priority_score,
+        rec.value_score,
+        rec.urgency_score,
+        rec.uncertainty_score,
+        rec.progress_pct,
+        rec.status,
+        rec.success_criteria,
+        rec.compute_budget_ms,
+        rec.compute_used_ms,
+        JSON.stringify(rec.linked_task_ids),
+        JSON.stringify(rec.linked_research_ids),
+        JSON.stringify(rec.knowledge_gaps),
+        rec.last_evaluated_at,
+        rec.created_at,
+        rec.updated_at
+      );
+    return rec;
+  }
+
+  async getObjectiveById(id: string, tenantId: string): Promise<ObjectiveRecord | null> {
+    const r = this.db.prepare('SELECT * FROM objectives WHERE id = ? AND tenant_id = ?').get(id, tenantId) as Record<string, unknown> | undefined;
+    return r ? this.mapObjectiveRow(r) : null;
+  }
+
+  async listObjectives(tenantId?: string, opts?: { status?: ObjectiveStatus; limit?: number }): Promise<ObjectiveRecord[]> {
+    const clauses: string[] = [];
+    const params: (string | number)[] = [];
+    if (tenantId) {
+      clauses.push('tenant_id = ?');
+      params.push(tenantId);
+    }
+    if (opts?.status) {
+      clauses.push('status = ?');
+      params.push(opts.status);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    params.push(opts?.limit ?? 50);
+    const rows = this.db
+      .prepare(`SELECT * FROM objectives ${where} ORDER BY priority_score DESC, updated_at DESC LIMIT ?`)
+      .all(...params) as Record<string, unknown>[];
+    return rows.map((r) => this.mapObjectiveRow(r));
+  }
+
+  async updateObjective(
+    id: string,
+    tenantId: string,
+    patch: Parameters<NeoDatabase['updateObjective']>[2]
+  ): Promise<ObjectiveRecord | null> {
+    const existing = await this.getObjectiveById(id, tenantId);
+    if (!existing) return null;
+    const merged: ObjectiveRecord = { ...existing, ...patch, updated_at: new Date().toISOString() };
+    this.db
+      .prepare(
+        `UPDATE objectives SET title = ?, description = ?, priority_score = ?, value_score = ?, urgency_score = ?, uncertainty_score = ?, progress_pct = ?, status = ?, compute_used_ms = ?, linked_task_ids = ?, linked_research_ids = ?, knowledge_gaps = ?, last_evaluated_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`
+      )
+      .run(
+        merged.title,
+        merged.description,
+        merged.priority_score,
+        merged.value_score,
+        merged.urgency_score,
+        merged.uncertainty_score,
+        merged.progress_pct,
+        merged.status,
+        merged.compute_used_ms,
+        JSON.stringify(merged.linked_task_ids),
+        JSON.stringify(merged.linked_research_ids),
+        JSON.stringify(merged.knowledge_gaps),
+        merged.last_evaluated_at,
+        merged.updated_at,
+        id,
+        tenantId
+      );
+    return merged;
+  }
+
   // --- Tools Registry & Executions ---
   private mapToolRow(r: Record<string, unknown>): ToolRecord {
     return {
@@ -1443,6 +1632,11 @@ export class SqliteNeoDatabase implements NeoDatabase {
         id
       );
     return merged;
+  }
+
+  async deleteModel(id: string): Promise<boolean> {
+    const res = this.db.prepare('DELETE FROM models WHERE id = ?').run(id);
+    return res.changes > 0;
   }
 
   async recordModelEvaluation(input: Omit<ModelEvaluationRecord, 'id' | 'created_at'>): Promise<ModelEvaluationRecord> {

@@ -24,6 +24,7 @@ export type TaskStatus =
   | 'running'
   | 'waiting_approval'
   | 'completed'
+  | 'partial'
   | 'failed'
   | 'cancelled';
 
@@ -32,6 +33,18 @@ export type TaskPriority =
   | 'user_task'
   | 'scheduled_task'
   | 'internal_improvement';
+
+export type EpistemicStatus =
+  | 'verified_fact'
+  | 'observation'
+  | 'assumption'
+  | 'prediction'
+  | 'opinion'
+  | 'uncertain';
+
+export type RetentionPolicy = 'permanent' | 'long_term' | 'session' | 'ephemeral';
+
+export type ObjectiveStatus = 'active' | 'paused' | 'achieved' | 'abandoned' | 'blocked';
 
 export interface TenantRecord {
   id: string;
@@ -91,6 +104,8 @@ export interface MemoryRecord {
   freshness_score: number;
   importance_score: number;
   confidence_score: number;
+  epistemic_status: EpistemicStatus;
+  retention_policy: RetentionPolicy;
   valid_from: string | null;
   valid_to: string | null;
   superseded_by: string | null;
@@ -98,6 +113,8 @@ export interface MemoryRecord {
   deleted_at: string | null;
   last_accessed_at: string | null;
   embedding: number[];
+  embedding_model: string;
+  embedding_dim: number;
   created_at: string;
 }
 
@@ -314,6 +331,8 @@ export interface GraphEntityRecord {
   attributes: Record<string, unknown>;
   confidence: number;
   embedding: number[];
+  embedding_model?: string;
+  embedding_dim?: number;
   created_at: string;
   updated_at: string;
 }
@@ -460,4 +479,27 @@ export interface ScheduledJobRecord {
   last_status: string | null;
   last_error: string | null;
   run_count: number;
+}
+
+export interface ObjectiveRecord {
+  id: string;
+  tenant_id: string;
+  title: string;
+  description: string;
+  category: string;
+  priority_score: number;
+  value_score: number;
+  urgency_score: number;
+  uncertainty_score: number;
+  progress_pct: number;
+  status: ObjectiveStatus;
+  success_criteria: string;
+  compute_budget_ms: number;
+  compute_used_ms: number;
+  linked_task_ids: string[];
+  linked_research_ids: string[];
+  knowledge_gaps: string[];
+  last_evaluated_at: string | null;
+  created_at: string;
+  updated_at: string;
 }

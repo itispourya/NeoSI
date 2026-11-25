@@ -109,7 +109,11 @@ export async function seedInitialData(db: NeoDatabase): Promise<void> {
         ...s,
         importance_score: 0.9,
         confidence_score: 0.95,
+        epistemic_status: 'verified_fact',
+        retention_policy: 'permanent',
         embedding: localMultilingualEmbedding(`${s.topic} ${s.title} ${s.content}`),
+        embedding_model: 'neo-embed-local-v2',
+        embedding_dim: 768,
       });
     }
   }
@@ -134,7 +138,7 @@ export async function seedInitialData(db: NeoDatabase): Promise<void> {
         vram_gb: 0,
         ram_gb: 0.25,
         modalities: ['text', 'code', 'structured_data', 'pdf'],
-        roles: ['primary', 'fast', 'deep', 'coding', 'research', 'reranking'],
+        roles: ['primary', 'lightweight', 'fast', 'reasoning', 'deep', 'coding', 'research', 'classification', 'extraction', 'reranking'],
         capabilities: { toolCalling: true, reasoning: 0.82, coding: 0.8, multilingual: 0.84, persian: 0.82 },
         benchmark_results: {},
         deployment_status: 'active' as const,
@@ -158,7 +162,7 @@ export async function seedInitialData(db: NeoDatabase): Promise<void> {
         vram_gb: 0,
         ram_gb: 0.1,
         modalities: ['text', 'multilingual'],
-        roles: ['embedding'],
+        roles: ['embeddings', 'embedding'],
         capabilities: { toolCalling: false, reasoning: 0, coding: 0.5, multilingual: 0.88, persian: 0.86 },
         benchmark_results: {},
         deployment_status: 'active' as const,
@@ -182,7 +186,7 @@ export async function seedInitialData(db: NeoDatabase): Promise<void> {
         vram_gb: 2.5,
         ram_gb: 4.0,
         modalities: ['text', 'code'],
-        roles: ['fast', 'primary', 'research'],
+        roles: ['lightweight', 'fast', 'primary', 'classification', 'extraction', 'research'],
         capabilities: { toolCalling: true, reasoning: 0.78, coding: 0.79, multilingual: 0.86, persian: 0.8 },
         benchmark_results: {},
         deployment_status: 'standby' as const,
@@ -230,7 +234,7 @@ export async function seedInitialData(db: NeoDatabase): Promise<void> {
         vram_gb: 12.0,
         ram_gb: 16.0,
         modalities: ['text', 'code'],
-        roles: ['primary', 'deep', 'research', 'coding'],
+        roles: ['primary', 'reasoning', 'deep', 'research', 'coding'],
         capabilities: { toolCalling: true, reasoning: 0.9, coding: 0.89, multilingual: 0.9, persian: 0.87 },
         benchmark_results: {},
         deployment_status: 'standby' as const,
@@ -254,7 +258,7 @@ export async function seedInitialData(db: NeoDatabase): Promise<void> {
         vram_gb: 1.5,
         ram_gb: 2.5,
         modalities: ['text', 'multilingual'],
-        roles: ['embedding'],
+        roles: ['embeddings', 'embedding'],
         capabilities: { toolCalling: false, reasoning: 0, coding: 0.6, multilingual: 0.95, persian: 0.93 },
         benchmark_results: {},
         deployment_status: 'standby' as const,
@@ -326,6 +330,19 @@ export async function seedInitialData(db: NeoDatabase): Promise<void> {
         run_count: 0,
       },
       {
+        id: 'sched-objectives-cycle',
+        name: 'Autonomous Objective Prioritization & Knowledge Gap Review',
+        job_kind: 'objectives_review',
+        priority: 'internal_improvement' as const,
+        interval_ms: 900_000, // 15 min
+        enabled: true,
+        last_run_at: null,
+        next_run_at: nowIso,
+        last_status: null,
+        last_error: null,
+        run_count: 0,
+      },
+      {
         id: 'sched-evolution-proposal',
         name: 'Self-Diagnostic & Evolution Sweep',
         job_kind: 'evolution_proposals',
@@ -342,5 +359,48 @@ export async function seedInitialData(db: NeoDatabase): Promise<void> {
     for (const j of jobs) {
       await db.upsertScheduledJob(j);
     }
+  }
+
+  // Seed Autonomous Objectives if empty
+  const existingObjectives = await db.listObjectives();
+  if (existingObjectives.length === 0) {
+    await db.createObjective({
+      tenant_id: defaultTenantId,
+      title: 'Maintain verified engineering & business knowledge currency',
+      description: 'Continuously ingest authoritative documentation, reconcile contradictions, and resolve knowledge gaps in semantic memory.',
+      category: 'knowledge',
+      priority_score: 0.78,
+      value_score: 0.85,
+      urgency_score: 0.65,
+      uncertainty_score: 0.4,
+      progress_pct: 25,
+      status: 'active',
+      success_criteria: 'Zero unresolved high-severity contradictions and regular semantic consolidation runs.',
+      compute_budget_ms: 45_000,
+      compute_used_ms: 0,
+      linked_task_ids: [],
+      linked_research_ids: [],
+      knowledge_gaps: [],
+      last_evaluated_at: null,
+    });
+    await db.createObjective({
+      tenant_id: defaultTenantId,
+      title: 'Enforce zero-trust SSRF, sandbox & tenant isolation boundaries',
+      description: 'Monitor tool execution logs and repository code paths for security regressions and injection resilience.',
+      category: 'security',
+      priority_score: 0.86,
+      value_score: 0.95,
+      urgency_score: 0.8,
+      uncertainty_score: 0.2,
+      progress_pct: 60,
+      status: 'active',
+      success_criteria: '100% pass rate on security and hallucination resistance benchmark suites.',
+      compute_budget_ms: 30_000,
+      compute_used_ms: 0,
+      linked_task_ids: [],
+      linked_research_ids: [],
+      knowledge_gaps: [],
+      last_evaluated_at: null,
+    });
   }
 }

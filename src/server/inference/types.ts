@@ -3,19 +3,36 @@ import type { SupportedLanguage } from '../db/schema.ts';
 export type ModelRole =
   | 'primary'
   | 'fast'
+  | 'lightweight'
   | 'deep'
   | 'reasoning'
   | 'business'
   | 'coding'
   | 'research'
+  | 'classification'
+  | 'extraction'
+  | 'embeddings'
   | 'embedding'
   | 'reranking'
+  | 'multimodal'
   | 'vision'
   | 'speech_recognition'
   | 'speech_generation'
   | 'specialized';
 
 export type RuntimeKind = 'embedded' | 'ollama' | 'vllm' | 'tensorrt-llm' | 'transformers';
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface ToolCallResult {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
 
 export interface ModelCapabilities {
   toolCalling: boolean;
@@ -60,6 +77,8 @@ export interface InferenceRequest {
   tenantId?: string;
   preferredRuntime?: RuntimeKind;
   preferredModelId?: string;
+  strictTarget?: boolean;
+  tools?: ToolDefinition[];
   language?: SupportedLanguage;
   responseFormat?: 'json' | 'text';
   maxTokens?: number;
@@ -75,6 +94,8 @@ export interface InferenceResponse {
   completionTokens: number;
   latencyMs: number;
   tokensPerSec: number;
+  toolCalls?: ToolCallResult[];
+  isFallback?: boolean;
 }
 
 export type InferenceStreamChunk =
@@ -88,6 +109,7 @@ export interface ModelRuntime {
   readonly displayName: string;
   isConfigured(): boolean;
   healthCheck(): Promise<ModelHealth>;
+  probeModelLoaded?(modelId: string): Promise<{ ready: boolean; message: string }>;
   generate(req: InferenceRequest, modelId: string): Promise<InferenceResponse>;
   stream(req: InferenceRequest, modelId: string): InferenceStream;
 }
@@ -127,7 +149,9 @@ export interface ModelRegistry {
     }>
   >;
   installModel(modelId: string, options?: { sourceUrl?: string; expectedSha256?: string }): Promise<{ ok: boolean; message: string }>;
+  verifyModelReady(modelId: string): Promise<{ ready: boolean; message: string }>;
   activateModel(modelId: string, role?: ModelRole): Promise<ModelDeployment>;
   rollbackModel(role?: ModelRole): Promise<ModelDeployment | null>;
+  deleteModel(modelId: string): Promise<boolean>;
   getHealth(): Promise<ModelHealth[]>;
 }

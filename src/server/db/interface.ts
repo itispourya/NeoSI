@@ -14,6 +14,8 @@ import type {
   MessageRecord,
   ModelEvaluationRecord,
   ModelRecord,
+  ObjectiveRecord,
+  ObjectiveStatus,
   ResearchReportRecord,
   ScheduledJobRecord,
   SelfUpgradeRecord,
@@ -59,6 +61,7 @@ export interface MemoryQueryOptions {
 
 export interface MemorySearchOptions extends MemoryQueryOptions {
   queryText?: string;
+  queryEmbeddingModel?: string;
   minScore?: number;
 }
 
@@ -89,16 +92,40 @@ export interface NeoDatabase {
   listMessages(conversationId: string, tenantId: string, limit?: number): Promise<MessageRecord[]>;
   addMessage(input: Omit<MessageRecord, 'id' | 'created_at'>): Promise<MessageRecord>;
 
-  // Memories (All 7 Types + Temporal + Versioning + Hybrid Retrieval)
+  // Memories (All 7 Types + Temporal + Epistemic + Embedding-Space Isolation + Hybrid Retrieval)
   insertMemory(
     input: Omit<
       MemoryRecord,
-      'id' | 'created_at' | 'importance_score' | 'confidence_score' | 'valid_from' | 'valid_to' | 'superseded_by' | 'version' | 'deleted_at' | 'last_accessed_at'
+      | 'id'
+      | 'created_at'
+      | 'importance_score'
+      | 'confidence_score'
+      | 'epistemic_status'
+      | 'retention_policy'
+      | 'valid_from'
+      | 'valid_to'
+      | 'superseded_by'
+      | 'version'
+      | 'deleted_at'
+      | 'last_accessed_at'
+      | 'embedding_model'
+      | 'embedding_dim'
     > &
       Partial<
         Pick<
           MemoryRecord,
-          'importance_score' | 'confidence_score' | 'valid_from' | 'valid_to' | 'superseded_by' | 'version' | 'deleted_at' | 'last_accessed_at'
+          | 'importance_score'
+          | 'confidence_score'
+          | 'epistemic_status'
+          | 'retention_policy'
+          | 'valid_from'
+          | 'valid_to'
+          | 'superseded_by'
+          | 'version'
+          | 'deleted_at'
+          | 'last_accessed_at'
+          | 'embedding_model'
+          | 'embedding_dim'
         >
       >
   ): Promise<MemoryRecord>;
@@ -109,7 +136,22 @@ export interface NeoDatabase {
     patch: Partial<
       Pick<
         MemoryRecord,
-        'title' | 'content' | 'topic' | 'structured_facts' | 'reliability_score' | 'freshness_score' | 'importance_score' | 'confidence_score' | 'valid_from' | 'valid_to' | 'superseded_by' | 'embedding'
+        | 'title'
+        | 'content'
+        | 'topic'
+        | 'structured_facts'
+        | 'reliability_score'
+        | 'freshness_score'
+        | 'importance_score'
+        | 'confidence_score'
+        | 'epistemic_status'
+        | 'retention_policy'
+        | 'valid_from'
+        | 'valid_to'
+        | 'superseded_by'
+        | 'embedding'
+        | 'embedding_model'
+        | 'embedding_dim'
       >
     >
   ): Promise<MemoryRecord | null>;
@@ -161,6 +203,35 @@ export interface NeoDatabase {
   appendTaskEvent(input: Omit<TaskEventRecord, 'id' | 'created_at'>): Promise<TaskEventRecord>;
   listTaskEvents(taskId: string, tenantId: string, limit?: number): Promise<TaskEventRecord[]>;
 
+  // Autonomous Objectives
+  createObjective(
+    input: Omit<ObjectiveRecord, 'id' | 'created_at' | 'updated_at'>
+  ): Promise<ObjectiveRecord>;
+  getObjectiveById(id: string, tenantId: string): Promise<ObjectiveRecord | null>;
+  listObjectives(tenantId?: string, opts?: { status?: ObjectiveStatus; limit?: number }): Promise<ObjectiveRecord[]>;
+  updateObjective(
+    id: string,
+    tenantId: string,
+    patch: Partial<
+      Pick<
+        ObjectiveRecord,
+        | 'title'
+        | 'description'
+        | 'priority_score'
+        | 'value_score'
+        | 'urgency_score'
+        | 'uncertainty_score'
+        | 'progress_pct'
+        | 'status'
+        | 'compute_used_ms'
+        | 'linked_task_ids'
+        | 'linked_research_ids'
+        | 'knowledge_gaps'
+        | 'last_evaluated_at'
+      >
+    >
+  ): Promise<ObjectiveRecord | null>;
+
   // Tools Registry & Audit Executions
   listTools(): Promise<ToolRecord[]>;
   getToolById(id: string): Promise<ToolRecord | null>;
@@ -181,6 +252,7 @@ export interface NeoDatabase {
       >
     >
   ): Promise<ModelRecord | null>;
+  deleteModel(id: string): Promise<boolean>;
   recordModelEvaluation(input: Omit<ModelEvaluationRecord, 'id' | 'created_at'>): Promise<ModelEvaluationRecord>;
   listModelEvaluations(modelId?: string, limit?: number): Promise<ModelEvaluationRecord[]>;
 

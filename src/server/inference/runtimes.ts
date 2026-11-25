@@ -85,6 +85,64 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
     }
   }
 
+  async probeModelLoaded(modelId: string): Promise<{ ready: boolean; message: string }> {
+    const base = this.getBaseUrl().replace(/\/+$/, '');
+    if (!base) {
+      return { ready: false, message: `${this.displayName} endpoint is not configured.` };
+    }
+
+    if (this.kind === 'ollama') {
+      try {
+        const showRes = await fetch(`${base}/api/show`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: modelId }),
+          signal: AbortSignal.timeout(3000),
+        });
+        if (showRes.ok) {
+          return { ready: true, message: `Model '${modelId}' verified in Ollama runtime.` };
+        }
+        const tagsRes = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(3000) });
+        if (tagsRes.ok) {
+          const tags = (await tagsRes.json()) as { models?: Array<{ name?: string; model?: string }> };
+          const found = (tags.models || []).some((m) => m.name === modelId || m.model === modelId);
+          if (found) {
+            return { ready: true, message: `Model '${modelId}' present in Ollama tags.` };
+          }
+          return { ready: false, message: `Model '${modelId}' is not pulled in Ollama (${base}).` };
+        }
+        return { ready: false, message: `Ollama probe returned HTTP ${showRes.status}.` };
+      } catch (err) {
+        return {
+          ready: false,
+          message: `Ollama unreachable at ${base}: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    try {
+      const res = await fetch(`${base}/v1/models`, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) {
+        return { ready: false, message: `${this.displayName} /v1/models returned HTTP ${res.status}.` };
+      }
+      const data = (await res.json()) as { data?: Array<{ id?: string }> };
+      const availableIds = (data.data || []).map((m) => m.id || '').filter(Boolean);
+      const exactMatch = availableIds.some((id) => id === modelId || id.endsWith(`/${modelId}`));
+      if (exactMatch) {
+        return { ready: true, message: `Model '${modelId}' verified on ${this.displayName}.` };
+      }
+      return {
+        ready: false,
+        message: `Model '${modelId}' is not loaded on ${this.displayName} (loaded: ${availableIds.slice(0, 5).join(', ') || 'none'}).`,
+      };
+    } catch (err) {
+      return {
+        ready: false,
+        message: `${this.displayName} unreachable at ${base}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
   async generate(req: InferenceRequest, modelId: string): Promise<InferenceResponse> {
     const base = this.getBaseUrl().replace(/\/+$/, '');
     if (!base) throw new Error(`${this.displayName} base URL not configured`);
@@ -103,6 +161,16 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
     if (req.responseFormat === 'json' && this.kind !== 'ollama') {
       body.response_format = { type: 'json_object' };
     }
+    if (Array.isArray(req.tools) && req.tools.length > 0) {
+      body.tools = req.tools.map((t) => ({
+        type: 'function',
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters,
+        },
+      }));
+    }
 
     const res = await fetch(`${base}/v1/chat/completions`, {
       method: 'POST',
@@ -115,10 +183,31 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
     }
 
     const data = (await res.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{
+        message?: {
+          content?: string;
+          tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+        };
+      }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
-    const text = data.choices?.[0]?.message?.content ?? '';
+    const msg = data.choices?.[0]?.message;
+    const text = msg?.content ?? '';
+    const toolCalls = Array.isArray(msg?.tool_calls)
+      ? msg.tool_calls.map((tc, idx) => {
+          let parsedArgs: Record<string, unknown> = {};
+          try {
+            parsedArgs = tc.function?.arguments ? (JSON.parse(tc.function.arguments) as Record<string, unknown>) : {};
+          } catch {
+            parsedArgs = { raw: tc.function?.arguments || '' };
+          }
+          return {
+            id: tc.id || `tc_${idx}`,
+            name: tc.function?.name || 'unknown',
+            arguments: parsedArgs,
+          };
+        })
+      : undefined;
     const promptTokens = data.usage?.prompt_tokens ?? estimateTokens(req.prompt + (req.systemInstruction || ''));
     const completionTokens = data.usage?.completion_tokens ?? estimateTokens(text);
     const latencyMs = Math.max(1, Date.now() - start);
@@ -132,6 +221,8 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
       completionTokens,
       latencyMs,
       tokensPerSec,
+      ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
+      isFallback: false,
     };
   }
 
@@ -202,6 +293,7 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
         completionTokens,
         latencyMs,
         tokensPerSec: Number(((completionTokens / latencyMs) * 1000).toFixed(1)),
+        isFallback: false,
       },
     };
   }
@@ -209,13 +301,13 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
 
 /**
  * Neo Embedded Cognitive Runtime:
- * 100% self-contained CPU-native symbolic + deterministic reasoning, structured planner,
- * business auditor, code synthesizer, and grounded multilingual synthesis engine.
- * Guarantees Neo always boots and operates independently even with zero GPU and zero external services.
+ * CPU-native deterministic symbolic fallback & guardrail engine.
+ * Guarantees Neo always boots when external open-weight servers are offline,
+ * while honestly tagging all outputs with runtime='embedded' and isFallback=true.
  */
 export class NeoEmbeddedRuntime implements ModelRuntime {
   public readonly kind: RuntimeKind = 'embedded';
-  public readonly displayName = 'Neo Embedded Cognitive Core';
+  public readonly displayName = 'Neo Embedded CPU Fallback Core';
 
   isConfigured(): boolean {
     return true;
@@ -228,8 +320,18 @@ export class NeoEmbeddedRuntime implements ModelRuntime {
       status: 'healthy',
       endpoint: 'in-process',
       latencyMs: 1,
-      message: 'Neo Embedded Cognitive Core active (CPU-native, 0 external AI dependencies)',
+      message: 'Neo Embedded CPU Fallback Core active (deterministic symbolic fallback; 0 external cloud dependencies)',
       checkedAt: new Date().toISOString(),
+    };
+  }
+
+  async probeModelLoaded(modelId: string): Promise<{ ready: boolean; message: string }> {
+    return {
+      ready: modelId === 'neo-embedded-core-v1' || modelId === 'neo-embed-local-v2',
+      message:
+        modelId === 'neo-embedded-core-v1' || modelId === 'neo-embed-local-v2'
+          ? `Embedded module '${modelId}' compiled in-process.`
+          : `Model '${modelId}' is not an in-process embedded module.`,
     };
   }
 
