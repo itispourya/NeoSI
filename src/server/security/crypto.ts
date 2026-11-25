@@ -215,6 +215,12 @@ export async function safeExternalFetch(
   const maxRedirects = opts.maxRedirects ?? 4;
   const timeoutMs = opts.timeoutMs ?? 12_000;
   const maxBytes = opts.maxBytes ?? 2_000_000;
+  if (!Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 8) {
+    throw new Error('maxRedirects must be an integer between 0 and 8.');
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new Error('Invalid external fetch timeout or response size limit.');
+  }
   const fetchFn = opts.fetchImpl ?? fetch;
 
   let currentUrl = rawUrl;
@@ -237,18 +243,47 @@ export async function safeExternalFetch(
       if (!location) {
         throw new Error(`Redirect (${res.status}) without Location header from ${currentUrl}`);
       }
-      const nextUrl = new URL(location, check.url).toString();
-      currentUrl = nextUrl;
+      const next = new URL(location, check.url);
+      // Never forward a signed webhook payload or caller-supplied headers to another origin.
+      if (next.origin !== check.url.origin) {
+        throw new Error(`Cross-origin redirect blocked from ${check.url.origin} to ${next.origin}`);
+      }
+      currentUrl = next.toString();
       continue;
     }
 
-    const arrayBuf = await res.arrayBuffer();
-    if (arrayBuf.byteLength > maxBytes) {
+    const declaredLength = Number(res.headers.get('content-length') || 0);
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      await res.body?.cancel();
       throw new Error(`Response exceeded max allowed size (${maxBytes} bytes) from ${currentUrl}`);
     }
-    const bodyBuffer = Buffer.from(arrayBuf);
+
+    const chunks: Buffer[] = [];
+    let receivedBytes = 0;
+    if (res.body) {
+      const reader = res.body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          receivedBytes += value.byteLength;
+          if (receivedBytes > maxBytes) {
+            await reader.cancel();
+            throw new Error(`Response exceeded max allowed size (${maxBytes} bytes) from ${currentUrl}`);
+          }
+          chunks.push(Buffer.from(value));
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    const bodyBuffer = Buffer.concat(chunks);
+    const bufferedResponse = new Response(
+      [204, 205, 304].includes(res.status) ? null : bodyBuffer,
+      { status: res.status, statusText: res.statusText, headers: res.headers }
+    );
     return {
-      response: res,
+      response: bufferedResponse,
       finalUrl: check.url.toString(),
       bodyBuffer,
       bodyText: bodyBuffer.toString('utf8'),
