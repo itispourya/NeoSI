@@ -121,6 +121,7 @@ knowledgeRouter.post('/knowledge/query', requireApiGatewayAuth('read'), async (r
   const db = await getDb();
   const embedding = await embeddingEngine.embed(parsed.data.query);
   const matches = await db.searchMemories(embedding.vector, {
+    queryEmbeddingModel: embedding.model,
     memoryType: parsed.data.memoryType as MemoryType | undefined,
     tenantId: req.neoAuth!.tenant.id,
     includeGlobal: true,
@@ -137,6 +138,7 @@ knowledgeRouter.get('/knowledge/search', requireApiGatewayAuth('read'), async (r
   const db = await getDb();
   const emb = await embeddingEngine.embed(q);
   const matches = await db.searchMemories(emb.vector, {
+    queryEmbeddingModel: emb.model,
     tenantId: req.neoAuth!.tenant.id,
     includeGlobal: true,
     queryText: q,
