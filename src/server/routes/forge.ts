@@ -2,11 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { getDb } from '../db/adapter.ts';
 import { forgeDynamicEndpoint, invokeDynamicEndpoint } from '../forge/generator.ts';
-import { checkRateLimit, requireApiGatewayAuth } from '../security/auth.ts';
+import { checkRateLimit, requireAdminConsoleAuth, requireApiGatewayAuth } from '../security/auth.ts';
 
 export const forgeRouter = Router();
 
-forgeRouter.get('/forge/endpoints', requireApiGatewayAuth('admin'), async (req, res) => {
+forgeRouter.get('/forge/endpoints', requireAdminConsoleAuth, async (req, res) => {
   const db = await getDb();
   const endpoints = await db.listDynamicApis(req.neoAuth!.tenant.id);
   res.json({ endpoints });
@@ -47,7 +47,7 @@ forgeRouter.patch('/forge/:slug/toggle', requireApiGatewayAuth('forge'), async (
   return res.json({ endpoint: updated });
 });
 
-forgeRouter.get('/openapi.json', requireApiGatewayAuth('admin'), async (_req, res) => {
+forgeRouter.get('/openapi.json', requireAdminConsoleAuth, async (_req, res) => {
   const db = await getDb();
   const dynamicApis = await db.listDynamicApis();
 
