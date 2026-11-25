@@ -217,7 +217,7 @@ function pinnedHttpFetch(
 
   return new Promise((resolve, reject) => {
     const transport = url.protocol === 'https:' ? https : http;
-    const hostname = url.hostname.replace(/^\\[|\\]$/g, '');
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
     const headers = { 'Accept-Encoding': 'identity', ...(opts.headers || {}), Host: url.host };
     let settled = false;
     let receivedBytes = 0;
