@@ -355,7 +355,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
       : rows.map(() => 0);
     const ranked = hybridRerank(
       rows.map((r, i) => ({
-        item: { ...r, embedding: [] } as MemoryRecord,
+        item: { ...r, embedding: [] } as unknown as MemoryRecord,
         vectorScore: Number(r.similarity || 0),
         lexicalScore: bm25[i] || 0,
         reliability: Number(r.reliability_score ?? 0.8),
