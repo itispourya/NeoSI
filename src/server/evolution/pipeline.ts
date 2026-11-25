@@ -115,8 +115,6 @@ export async function runConfigExperiment(input: {
 }): Promise<EvolutionExperimentRecord> {
   const db = await getDb();
   const baseline = await runModelBenchmarkSuite('neo-embedded-core-v1');
-  const candidate = await runModelBenchmarkSuite('neo-embedded-core-v1');
-
   // The candidate config is not yet connected to inference requests. Never label a same-config rerun as validation.
 
   return db.recordEvolutionExperiment({
@@ -326,12 +324,19 @@ export async function approveCodeUpgrade(id: string): Promise<SelfUpgradeRecord 
   const db = await getDb();
   const existing = await db.getUpgradeById(id);
   if (!existing) return null;
+  if (existing.status !== 'sandbox_passed') {
+    throw new Error(`Only sandbox-passed proposals can be promoted (current status: ${existing.status}).`);
+  }
   const guard = validateTargetFiles(existing.target_files);
   if (!guard.allowed) {
     throw new Error(`Security guardrail violation: protected files cannot be promoted (${guard.blockedFiles.join(', ')})`);
   }
-  if (existing.test_results.failed > 0 || existing.test_results.passed === 0) {
-    throw new Error('Cannot promote an upgrade that did not pass 100% of sandbox tests');
+  if (
+    existing.test_results.total === 0 ||
+    existing.test_results.failed > 0 ||
+    existing.test_results.passed !== existing.test_results.total
+  ) {
+    throw new Error('Cannot promote an upgrade unless every candidate sandbox test passed.');
   }
   const code = extractAddedCodeFromDiff(existing.unified_diff);
   if (code) {
