@@ -272,7 +272,7 @@ export interface NeoDatabase {
   listDynamicApis(tenantId?: string): Promise<DynamicApiRecord[]>;
   getDynamicApiBySlug(slug: string, tenantId?: string): Promise<DynamicApiRecord | null>;
   upsertDynamicApi(input: Omit<DynamicApiRecord, 'id' | 'call_count' | 'created_at' | 'updated_at'>): Promise<DynamicApiRecord>;
-  incrementDynamicApiCalls(slug: string): Promise<void>;
+  incrementDynamicApiCalls(slug: string, tenantId: string): Promise<void>;
   toggleDynamicApi(slug: string, enabled: boolean, tenantId?: string): Promise<DynamicApiRecord | null>;
 
   // Background Jobs & Autonomous Scheduler
