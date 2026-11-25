@@ -222,11 +222,12 @@ function pinnedHttpFetch(
     let settled = false;
     let receivedBytes = 0;
     const chunks: Buffer[] = [];
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const clearRequestTimer = () => { if (timer) clearTimeout(timer); };
     const fail = (error: Error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearRequestTimer();
       reject(error);
     };
 
@@ -263,7 +264,7 @@ function pinnedHttpFetch(
       response.on('end', () => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        clearRequestTimer();
         const responseHeaders = new Headers();
         for (const [key, value] of Object.entries(response.headers)) {
           if (value !== undefined) responseHeaders.set(key, Array.isArray(value) ? value.join(', ') : value);
