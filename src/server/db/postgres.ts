@@ -947,14 +947,16 @@ export class PostgresNeoDatabase implements NeoDatabase {
       `INSERT INTO dynamic_apis (id, tenant_id, slug, name, description, method, input_schema, output_schema, handler_code, test_code, test_report, openapi_spec, rate_limit_rpm, enabled)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, method = EXCLUDED.method, input_schema = EXCLUDED.input_schema, output_schema = EXCLUDED.output_schema, handler_code = EXCLUDED.handler_code, test_code = EXCLUDED.test_code, test_report = EXCLUDED.test_report, openapi_spec = EXCLUDED.openapi_spec, rate_limit_rpm = EXCLUDED.rate_limit_rpm, enabled = EXCLUDED.enabled, updated_at = NOW()
+       WHERE dynamic_apis.tenant_id = EXCLUDED.tenant_id
        RETURNING *`,
       [uuidv4(), input.tenant_id, input.slug, input.name, input.description, input.method, JSON.stringify(input.input_schema), JSON.stringify(input.output_schema), input.handler_code, input.test_code, JSON.stringify(input.test_report), JSON.stringify(input.openapi_spec), input.rate_limit_rpm, input.enabled]
     );
+    if (!rows[0]) throw new Error('This endpoint slug is already reserved by another workspace.');
     return rows[0];
   }
 
-  async incrementDynamicApiCalls(slug: string): Promise<void> {
-    await this.pool.query('UPDATE dynamic_apis SET call_count = call_count + 1 WHERE slug = $1', [slug]);
+  async incrementDynamicApiCalls(slug: string, tenantId: string): Promise<void> {
+    await this.pool.query('UPDATE dynamic_apis SET call_count = call_count + 1 WHERE slug = $1 AND tenant_id = $2', [slug, tenantId]);
   }
 
   async toggleDynamicApi(slug: string, enabled: boolean, tenantId?: string): Promise<DynamicApiRecord | null> {
