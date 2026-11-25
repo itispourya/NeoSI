@@ -505,6 +505,14 @@ export class PostgresNeoDatabase implements NeoDatabase {
     return { ...rows[0], embedding: input.embedding };
   }
 
+  async getEntityById(id: string, tenantId: string): Promise<GraphEntityRecord | null> {
+    const { rows } = await this.pool.query(
+      'SELECT id, tenant_id, name, entity_type, aliases, attributes, confidence, created_at, updated_at FROM entities WHERE id = $1 AND tenant_id = $2',
+      [id, tenantId]
+    );
+    return rows[0] ? { ...rows[0], embedding: [] } : null;
+  }
+
   async listEntities(tenantId: string, opts?: { entityType?: string; query?: string; limit?: number }): Promise<GraphEntityRecord[]> {
     const clauses = ['tenant_id = $1'];
     const params: unknown[] = [tenantId];
@@ -1022,13 +1030,15 @@ export class PostgresNeoDatabase implements NeoDatabase {
     );
   }
 
-  async listTelemetry(limit = 50): Promise<LlmTelemetryRecord[]> {
-    const { rows } = await this.pool.query('SELECT * FROM llm_telemetry ORDER BY created_at DESC LIMIT $1', [limit]);
+  async listTelemetry(limit = 50, tenantId?: string): Promise<LlmTelemetryRecord[]> {
+    const { rows } = tenantId
+      ? await this.pool.query('SELECT * FROM llm_telemetry WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2', [tenantId, limit])
+      : await this.pool.query('SELECT * FROM llm_telemetry ORDER BY created_at DESC LIMIT $1', [limit]);
     return rows;
   }
 
-  async getTelemetrySummary() {
-    const rows = await this.listTelemetry(500);
+  async getTelemetrySummary(tenantId?: string) {
+    const rows = await this.listTelemetry(500, tenantId);
     const totalCalls = rows.length;
     const successes = rows.filter((r) => r.success).length;
     const totalTokens = rows.reduce((s, r) => s + r.prompt_tokens + r.completion_tokens, 0);
