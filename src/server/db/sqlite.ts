@@ -2102,4 +2102,11 @@ export class SqliteNeoDatabase implements NeoDatabase {
       .prepare(`INSERT INTO admin_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
       .run(key, value, new Date().toISOString());
   }
+
+  async setAdminConfigIfAbsent(key: string, value: string): Promise<boolean> {
+    const result = this.db
+      .prepare('INSERT INTO admin_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
+      .run(key, value, new Date().toISOString());
+    return Number(result.changes) === 1;
+  }
 }
