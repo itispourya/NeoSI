@@ -111,8 +111,11 @@ export function isPrivateOrReservedIp(ipRaw: string): boolean {
     if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
     if (a === 192 && b === 0 && c === 0) return true; // 192.0.0.0/24
     if (a === 192 && b === 0 && c === 2) return true; // TEST-NET-1
+    if (a === 192 && b === 88 && c === 99) return true; // Deprecated 6to4 relay anycast
     if (a === 192 && b === 168) return true; // 192.168.0.0/16
     if (a === 198 && (b === 18 || b === 19)) return true; // Benchmarking
+    if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2
+    if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3
     if (a >= 224) return true; // Multicast & reserved
     return false;
   }
@@ -122,6 +125,14 @@ export function isPrivateOrReservedIp(ipRaw: string): boolean {
     if (ip.startsWith('fc') || ip.startsWith('fd')) return true; // ULA fc00::/7
     if (ip.startsWith('fe8') || ip.startsWith('fe9') || ip.startsWith('fea') || ip.startsWith('feb')) return true; // fe80::/10 link-local
     if (ip.startsWith('ff')) return true; // Multicast
+    if (ip.startsWith('::')) return true; // Unspecified, loopback, and deprecated IPv4-compatible forms
+    if (ip.startsWith('2001:')) {
+      const secondHextet = Number.parseInt(ip.split(':')[1] || '0', 16);
+      if (Number.isFinite(secondHextet) && (secondHextet <= 0x01ff || secondHextet === 0x0db8)) return true; // IETF special-purpose and documentation blocks
+    }
+    if (ip.startsWith('2002:')) return true; // 6to4 transition addresses
+    if (ip.startsWith('3fff:')) return true; // IPv6 documentation range
+    if (ip.startsWith('64:ff9b:')) return true; // Well-known NAT64 prefix
     return false;
   }
 
