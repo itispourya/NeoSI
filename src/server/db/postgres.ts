@@ -1098,4 +1098,12 @@ export class PostgresNeoDatabase implements NeoDatabase {
       [key, value]
     );
   }
+
+  async setAdminConfigIfAbsent(key: string, value: string): Promise<boolean> {
+    const result = await this.pool.query(
+      'INSERT INTO admin_config (key, value, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (key) DO NOTHING RETURNING key',
+      [key, value]
+    );
+    return (result.rowCount ?? 0) === 1;
+  }
 }
