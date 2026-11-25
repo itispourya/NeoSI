@@ -117,7 +117,8 @@ export async function runConfigExperiment(input: {
   const baseline = await runModelBenchmarkSuite('neo-embedded-core-v1');
   const candidate = await runModelBenchmarkSuite('neo-embedded-core-v1');
 
-  const improvedOrHeld = candidate.overall_score >= baseline.overall_score && candidate.passed_cases >= baseline.passed_cases;
+  // The candidate config is not yet connected to inference requests. Never label a same-config rerun as validation.
+
   return db.recordEvolutionExperiment({
     layer: 'B',
     title: input.title,
@@ -131,17 +132,21 @@ export async function runConfigExperiment(input: {
       totalCases: baseline.total_cases,
     },
     metrics_after: {
-      overallScore: candidate.overall_score,
-      avgLatencyMs: candidate.avg_latency_ms,
-      passedCases: candidate.passed_cases,
-      totalCases: candidate.total_cases,
+      overallScore: baseline.overall_score,
+      avgLatencyMs: baseline.avg_latency_ms,
+      passedCases: baseline.passed_cases,
+      totalCases: baseline.total_cases,
+      configurationApplied: false,
+      note: 'The candidate configuration has not been applied to the inference runtime; this experiment is inconclusive.',
     },
-    status: improvedOrHeld ? 'validated' : 'rejected',
+    status: 'inconclusive',
   });
 }
 
 /**
- * Layer C: Real Isolated Git Worktree / Sandbox Code Evolution + Real Benchmark Measurements
+ * Layer C: Standalone candidate module generation and isolated tests.
+ * The temporary Git repository is discarded after testing; the candidate is not benchmarked
+ * against or integrated into the full Neo source tree at this stage.
  */
 async function stageInIsolatedGitWorkspace(
   branchName: string,
@@ -272,22 +277,19 @@ test('tracks saved characters on oversized prompts', () => {
   const gitWorkspace = await stageInIsolatedGitWorkspace(branchName, draft.targetFile, draft.handlerCode, draft.testCode);
   gitWorkspace.cleanup();
 
-  // Measure real candidate benchmark AFTER staging & sandbox test run
-  const candidateEval = await runModelBenchmarkSuite('neo-embedded-core-v1');
-  const sandboxPassRate = sandboxReport.total > 0 ? Number(((sandboxReport.passed / sandboxReport.total) * 100).toFixed(1)) : 0;
-  const benchmarkAfter = {
-    accuracyScore: candidateEval.overall_score,
-    avgLatencyMs: candidateEval.avg_latency_ms,
-    passRate: sandboxPassRate,
-  };
-
-  const gate = evaluateBenchmarkGate(benchmarkBefore, benchmarkAfter, sandboxReport);
-  const autoEligible = gate.passed && !isProtectedPath(draft.targetFile);
-  const initialStatus = !gate.passed ? 'rejected' : env.autoMergeSafeUpgrades && autoEligible ? 'merged' : 'sandbox_passed';
+  // The test runner validates only the standalone candidate module. The existing Neo model benchmark
+  // is not evidence of candidate-code impact, so keep it as a reference and disable auto-promotion.
+  const allCandidateTestsPassed =
+    sandboxReport.total > 0 &&
+    sandboxReport.failed === 0 &&
+    sandboxReport.passed === sandboxReport.total;
+  const benchmarkAfter = { ...benchmarkBefore };
+  const autoEligible = false;
+  const initialStatus = allCandidateTestsPassed ? 'sandbox_passed' : 'rejected';
 
   const record = await db.createUpgrade({
     title: draft.title,
-    diagnosis: `${draft.diagnosis} [gitBranchCommitted=${gitWorkspace.gitCommitted}; isolation=${sandboxReport.isolation}]`,
+    diagnosis: `${draft.diagnosis} [temporaryGitCommitCreated=${gitWorkspace.gitCommitted}; isolation=${sandboxReport.isolation}; candidateIntegrationBenchmark=not_run; automaticPromotion=disabled]`,
     branch_name: branchName,
     target_files: [draft.targetFile],
     unified_diff: buildUnifiedDiff(draft.targetFile, draft.handlerCode),
@@ -335,7 +337,7 @@ export async function approveCodeUpgrade(id: string): Promise<SelfUpgradeRecord 
   if (code) {
     promoteVerifiedModule(existing.id, existing.target_files[0] || 'module.js', code);
   }
-  return db.updateUpgradeStatus(id, 'merged');
+  return db.updateUpgradeStatus(id, 'promoted');
 }
 
 export async function rejectCodeUpgrade(id: string): Promise<SelfUpgradeRecord | null> {
@@ -409,19 +411,21 @@ export async function prepareAndRunTrainingJob(input: {
   const datasetPath = path.join(trainDir, `neo-sft-${job.id}.jsonl`);
   fs.writeFileSync(datasetPath, samples.map((s) => JSON.stringify(s)).join('\n') + (samples.length ? '\n' : ''), 'utf8');
 
-  const adapterVersion = `neo-adapter-${new Date().toISOString().slice(0, 10)}-${job.id.slice(0, 6)}`;
-  const finalStatus = method === 'dataset_only' ? 'dataset_ready' : env.hfBaseUrl ? 'queued_for_trainer' : 'dataset_ready_trainer_offline';
+  // This pipeline only prepares a dataset. No trainer dispatch or adapter-weight generation exists yet.
+  const finalStatus = 'dataset_ready_training_not_started';
 
   const updated = await db.updateTrainingJob(job.id, {
     dataset_size: samples.length,
     dataset_path: datasetPath,
-    adapter_version: adapterVersion,
+    adapter_version: null,
     status: finalStatus,
     metrics: {
       deduplicatedSamples: samples.length,
       minReliabilityThreshold: minRel,
       piiFiltered: true,
       trainerEndpointConfigured: Boolean(env.hfBaseUrl),
+      trainingStarted: false,
+      adapterProduced: false,
     },
     finished_at: new Date().toISOString(),
   });
