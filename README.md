@@ -1,44 +1,69 @@
-# Neo — Autonomous Sovereign Cognitive Engine & API Forge
+# Neo — Autonomous Sovereign Cognitive Engine
 
-**Neo** is an independent, self-hosted, continuously learning autonomous cognitive operating system, software engineering agent, multi-module business intelligence engine for **Neos**, and dynamic API Forge.
+Neo is a self-hosted cognitive and agent runtime for local inference, tool execution, persistent memory, knowledge acquisition, and integration with Neos. It is designed to operate without a dependency on commercial hosted LLM APIs. Generative inference uses a configured local runtime such as Ollama, vLLM, TensorRT-LLM, or a compatible Transformers endpoint.
 
-Neo operates with **zero dependencies on external commercial LLM/AI APIs** (`@google/genai`, OpenAI, Anthropic, or OpenRouter cloud APIs are absent). It boots and executes locally via its CPU-native `neo-embedded-core-v1` + `neo-embed-local-v2` engines and natively integrates self-hosted open-weight model runtimes (**vLLM**, **Ollama**, **TensorRT-LLM**, and **HuggingFace Transformers**).
+## What is included
 
-## Core Architecture
-- **Independent Inference & Model Lifecycle (`src/server/inference/`)**: Hardware profiler (CPU/RAM/Disk/GPU VRAM), pluggable open-weight `InferenceEngine`, `NeoModelRegistry` (hardware & open-license compatibility, SHA-256 verification, activation & rollback), and a real 12-category `NEO_BENCHMARK_CASES` suite.
-- **13-Stage Cognitive Core (`src/server/cognitive/`)**: Intent & complexity classification, dependency-aware DAG `TaskPlanner`, 11 Zod-validated built-in tools + MCP JSON-RPC (`src/server/tools/registry.ts`), and an independent `CriticEngine` verifying grounding, arithmetic, and safety.
-- **Durable Agent Runtime (`src/server/agent/runtime.ts`)**: Persisted state machine (`pending -> planning -> running -> completed | failed | cancelled`) with step checkpointing, loop-signature guard, cancellation, SSE `/api/v1/tasks/:id/events`, and boot-time recovery of interrupted tasks.
-- **7-Layer Hybrid Memory & Knowledge Graph (`src/server/knowledge/`)**: `working`, `episodic`, `semantic`, `procedural`, `personal`, `organizational`, and `temporal` memory (with `valid_from`, `valid_to`, `superseded_by`), BM25 + multilingual 768-d cosine RRF retrieval, periodic `consolidation.ts`, entity/relationship graph with contradiction tracking, and a 16-stage `runAutonomousResearch` pipeline.
-- **4-Layer Safe Self-Evolution (`src/server/evolution/pipeline.ts`)**: Skill evaluation (Layer A), A/B cognitive config experiments (Layer B), isolated Git branch + subprocess unit test + measured before/after benchmark gating with `PROTECTED_CORE_PATHS` guardrails (Layer C), and privacy-filtered SFT/LoRA JSONL dataset building (Layer D).
-- **Security & Isolated Execution (`src/server/security/`, `src/server/sandbox/`)**: Fail-closed scrypt admin auth, scoped `neos_live_*` API keys with rotate/revoke, strict tenant isolation across every table, DNS-aware SSRF protection with manual redirect chain checks, `<untrusted_data>` prompt-injection wrapping, and OS subprocess / Docker container sandboxing (`env: {}`).
+- **Inference and model registry** — Local runtime adapters, hardware inspection, model registration, installation, runtime readiness probes, activation, rollback, and strict-target benchmarking.
+- **Cognitive services** — Request classification, planning, tool routing, reasoning orchestration, and critic-based verification.
+- **Agent runtime** — Persistent tasks, checkpoints, cancellation, recovery, permission-preserving resume, and explicit `completed`, `partial`, and `failed` outcomes.
+- **Memory and knowledge** — Typed memory, workspace-aware retrieval, temporal metadata, source provenance, consolidation, knowledge research, and tenant-validated graph relationships.
+- **Tool and API runtime** — Built-in tools, MCP JSON-RPC, API generation, and OpenAPI metadata.
+- **Evolution services** — Skill evaluation, experiments, upgrade proposals, code-generation evaluation, and training-data preparation.
+- **Security controls** — Scrypt admin credentials, scoped API keys, rate limits, tenant-scoped data access in the protected paths, DNS-pinned outbound requests, same-origin redirect policy, bounded response streaming, and fail-closed production code execution.
 
-## Quickstart (Local Development)
+## Important capability boundaries
+
+Neo's embedded CPU runtime is a deterministic symbolic fallback. It is not a general-purpose neural language model. For generative reasoning, connect a local model runtime and verify that the selected model is available there.
+
+Embedding behavior depends on the configured embedding backend. A deterministic CPU fallback is useful for local operation, but should not be represented as equivalent to a trained multilingual embedding model.
+
+The benchmark suite uses a small set of task-specific evaluators. It is useful for regression checks, but its scores are not a substitute for independent, standardized model evaluations. Strict-target execution prevents a benchmark from silently scoring a different fallback model.
+
+The development subprocess runner is not an OS security boundary. In production, dynamic code execution is disabled unless Docker isolation is explicitly selected and a Docker daemon is actually available. If the Docker sandbox is requested but unavailable, Neo refuses execution instead of falling back to a normal subprocess.
+
+Self-evolution features do not imply unrestricted autonomous production changes. Model activation requires runtime verification; proposals and code changes should remain subject to review, tests, and rollback controls.
+
+## Quickstart — local development
+
+Requirements: a recent Bun release and a supported Node.js runtime.
 
 ```bash
-npm install
-npm run dev
+cp .env.example .env
+bun install
+bun run dev
 ```
 
-Open `http://localhost:3000`, claim your initial admin passcode (`>= 6` characters) on the bootstrap screen, and explore the Control Plane.
+Open `http://localhost:3000`. On first setup, claim an administrator passcode containing at least 12 characters. In development, Neo can create an ephemeral session secret; sessions signed with an ephemeral secret do not survive process restarts.
 
-## Production & Multi-GPU Docker Deployment
+To use a generative local model, configure an available runtime endpoint in `.env`. The default embedded runtime is deterministic and does not download a model.
+
+## Production
+
+Set `NODE_ENV=production` and configure `NEO_SESSION_SECRET` with at least 32 bytes of unpredictable random data. For example:
 
 ```bash
-# Single-node production build
-npm run build
-npm run start
+openssl rand -hex 32
+```
 
-# PostgreSQL + pgvector + Redis + Ollama (dev / single GPU)
+Also configure the database credentials, trusted proxy hop count, CORS origins, and model runtime endpoint for the deployment. Production startup fails when the session secret is missing or too short.
+
+The default production Compose setup does not expose PostgreSQL or Redis to the public network; their published ports bind to host loopback. It requires `POSTGRES_PASSWORD` and `NEO_SESSION_SECRET` in the Compose `.env` file.
+
+```bash
+cp .env.example .env
+# Set POSTGRES_PASSWORD and NEO_SESSION_SECRET in .env before starting.
 docker compose --profile gpu-single up -d --build
-
-# Multi-GPU vLLM high-throughput cluster
-docker compose --profile gpu-multi up -d --build
 ```
 
-## Verification Suite
+Dynamic code execution remains disabled when `NEO_SANDBOX_MODE=subprocess` in production. Do not enable subprocess mode as a production isolation mechanism. A Docker sandbox requires a separately secured Docker daemon connection; the default Compose file does not mount the host Docker socket.
+
+## Validation
 
 ```bash
-npm run lint
-npm test
-npm run build
+bun run lint
+bun run test
+bun run build
 ```
+
+GitHub Actions runs the typecheck, test suite, and production frontend build on branch pushes and pull requests.
