@@ -14,7 +14,7 @@ import { requireApiGatewayAuth } from '../security/auth.ts';
 
 export const evolutionRouter = Router();
 
-evolutionRouter.get('/evolution', requireApiGatewayAuth('read'), async (req, res) => {
+evolutionRouter.get('/evolution', requireApiGatewayAuth('admin'), async (req, res) => {
   const db = await getDb();
   const [proposals, experiments, trainingJobs] = await Promise.all([
     db.listUpgrades(),
@@ -29,19 +29,19 @@ evolutionRouter.get('/evolution', requireApiGatewayAuth('read'), async (req, res
   });
 });
 
-evolutionRouter.post('/evolution/diagnose', requireApiGatewayAuth('write'), async (req, res) => {
+evolutionRouter.post('/evolution/diagnose', requireApiGatewayAuth('admin'), async (req, res) => {
   const focusArea = typeof req.body?.focusArea === 'string' ? req.body.focusArea.slice(0, 200) : undefined;
   const proposal = await runCodeEvolutionProposal(focusArea);
   res.status(201).json({ proposal });
 });
 
-evolutionRouter.post('/evolution/proposals', requireApiGatewayAuth('write'), async (req, res) => {
+evolutionRouter.post('/evolution/proposals', requireApiGatewayAuth('admin'), async (req, res) => {
   const focusArea = typeof req.body?.focusArea === 'string' ? req.body.focusArea.slice(0, 200) : undefined;
   const proposal = await runCodeEvolutionProposal(focusArea);
   res.status(201).json({ proposal });
 });
 
-evolutionRouter.get('/evolution/proposals/:id', requireApiGatewayAuth('read'), async (req, res) => {
+evolutionRouter.get('/evolution/proposals/:id', requireApiGatewayAuth('admin'), async (req, res) => {
   const db = await getDb();
   const proposal = await db.getUpgradeById(String(req.params.id));
   if (!proposal) return res.status(404).json({ error: 'Evolution proposal not found' });
@@ -77,7 +77,7 @@ const experimentSchema = z.object({
   configAfter: z.record(z.string(), z.unknown()).default({}),
 });
 
-evolutionRouter.post('/evolution/experiments', requireApiGatewayAuth('write'), async (req, res) => {
+evolutionRouter.post('/evolution/experiments', requireApiGatewayAuth('admin'), async (req, res) => {
   const parsed = experimentSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid experiment payload', issues: parsed.error.issues });
   const experiment = await runConfigExperiment(parsed.data);
@@ -103,13 +103,13 @@ evolutionRouter.post('/evolution/training', requireApiGatewayAuth('admin'), asyn
 });
 
 // Backward-compatible /upgrades aliases
-evolutionRouter.get('/upgrades', requireApiGatewayAuth('read'), async (_req, res) => {
+evolutionRouter.get('/upgrades', requireApiGatewayAuth('admin'), async (_req, res) => {
   const db = await getDb();
   const upgrades = await db.listUpgrades();
   res.json({ upgrades, autoMergeEnabled: env.autoMergeSafeUpgrades });
 });
 
-evolutionRouter.post('/upgrades/diagnose', requireApiGatewayAuth('write'), async (req, res) => {
+evolutionRouter.post('/upgrades/diagnose', requireApiGatewayAuth('admin'), async (req, res) => {
   const focusArea = typeof req.body?.focusArea === 'string' ? req.body.focusArea.slice(0, 200) : undefined;
   const proposal = await runCodeEvolutionProposal(focusArea);
   res.status(201).json({ proposal });
