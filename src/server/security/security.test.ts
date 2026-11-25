@@ -5,6 +5,7 @@ import {
   hashPasscode,
   redactPII,
   signWebhookPayload,
+  safeExternalFetch,
   validateExternalUrl,
   verifyPasscode,
   verifyWebhookSignature,
@@ -45,4 +46,37 @@ test('scrypt passcode hashing and scoped neos_live_ API key generation work dete
   const key = generateScopedApiKey();
   assert.ok(key.rawKey.startsWith('neos_live_'));
   assert.equal(key.hash.length, 64);
+});
+
+
+test('safe external fetch rejects cross-origin redirects before forwarding a request', async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => safeExternalFetch('https://public.example/start', {
+      lookupFn: async () => [{ address: '93.184.216.34', family: 4 }],
+      fetchImpl: async () => {
+        calls++;
+        return new Response(null, { status: 302, headers: { location: 'https://attacker.example/collect' } });
+      },
+    }),
+    /Cross-origin redirect blocked/
+  );
+  assert.equal(calls, 1);
+});
+
+test('safe external fetch enforces response byte limits while streaming', async () => {
+  await assert.rejects(
+    () => safeExternalFetch('https://public.example/large', {
+      maxBytes: 4,
+      lookupFn: async () => [{ address: '93.184.216.34', family: 4 }],
+      fetchImpl: async () => new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('1234'));
+          controller.enqueue(new TextEncoder().encode('5678'));
+          controller.close();
+        },
+      })),
+    }),
+    /Response exceeded max allowed size/
+  );
 });
