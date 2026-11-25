@@ -303,4 +303,5 @@ export interface NeoDatabase {
   // Admin Config
   getAdminConfig(key: string): Promise<string | null>;
   setAdminConfig(key: string, value: string): Promise<void>;
+  setAdminConfigIfAbsent(key: string, value: string): Promise<boolean>;
 }
