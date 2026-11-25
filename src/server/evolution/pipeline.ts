@@ -305,10 +305,6 @@ test('tracks saved characters on oversized prompts', () => {
     auto_eligible: autoEligible,
   });
 
-  if (initialStatus === 'merged') {
-    promoteVerifiedModule(record.id, draft.targetFile, draft.handlerCode);
-  }
-
   return record;
 }
 
