@@ -5,7 +5,7 @@ import { runModelBenchmarkSuite } from '../inference/evaluator.ts';
 import { inspectHardware } from '../inference/hardware.ts';
 import { modelRegistry, neoInferenceEngine } from '../inference/registry.ts';
 import type { ModelRole } from '../inference/types.ts';
-import { requireApiGatewayAuth } from '../security/auth.ts';
+import { requireAdminConsoleAuth, requireApiGatewayAuth } from '../security/auth.ts';
 
 export const modelsRouter = Router();
 
@@ -40,7 +40,7 @@ const registerModelSchema = z.object({
   roles: z.array(z.string()).optional(),
 });
 
-modelsRouter.post('/models', requireApiGatewayAuth('admin'), async (req, res) => {
+modelsRouter.post('/models', requireAdminConsoleAuth, async (req, res) => {
   const parsed = registerModelSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid model registration', issues: parsed.error.issues });
   try {
@@ -51,7 +51,7 @@ modelsRouter.post('/models', requireApiGatewayAuth('admin'), async (req, res) =>
   }
 });
 
-modelsRouter.post('/models/install', requireApiGatewayAuth('admin'), async (req, res) => {
+modelsRouter.post('/models/install', requireAdminConsoleAuth, async (req, res) => {
   const modelId = String(req.body?.modelId || '').trim();
   if (!modelId) return res.status(400).json({ error: 'modelId is required' });
   const result = await modelRegistry.installModel(modelId, {
@@ -61,13 +61,13 @@ modelsRouter.post('/models/install', requireApiGatewayAuth('admin'), async (req,
   return res.status(result.ok ? 200 : 400).json(result);
 });
 
-modelsRouter.post('/models/evaluate', requireApiGatewayAuth('admin'), async (req, res) => {
+modelsRouter.post('/models/evaluate', requireAdminConsoleAuth, async (req, res) => {
   const modelId = String(req.body?.modelId || 'neo-embedded-core-v1');
   const evaluation = await runModelBenchmarkSuite(modelId);
   return res.json({ evaluation });
 });
 
-modelsRouter.post('/models/activate', requireApiGatewayAuth('admin'), async (req, res) => {
+modelsRouter.post('/models/activate', requireAdminConsoleAuth, async (req, res) => {
   const modelId = String(req.body?.modelId || '').trim();
   const role = (typeof req.body?.role === 'string' ? req.body.role : 'primary') as ModelRole;
   if (!modelId) return res.status(400).json({ error: 'modelId is required' });
@@ -79,19 +79,19 @@ modelsRouter.post('/models/activate', requireApiGatewayAuth('admin'), async (req
   }
 });
 
-modelsRouter.post('/models/rollback', requireApiGatewayAuth('admin'), async (req, res) => {
+modelsRouter.post('/models/rollback', requireAdminConsoleAuth, async (req, res) => {
   const role = (typeof req.body?.role === 'string' ? req.body.role : 'primary') as ModelRole;
   const deployment = await modelRegistry.rollbackModel(role);
   if (!deployment) return res.status(404).json({ error: 'No rollback target model found' });
   return res.json({ deployment });
 });
 
-modelsRouter.post('/models/:id/verify', requireApiGatewayAuth('admin'), async (req, res) => {
+modelsRouter.post('/models/:id/verify', requireAdminConsoleAuth, async (req, res) => {
   const result = await modelRegistry.verifyModelReady(String(req.params.id));
   return res.status(result.ready ? 200 : 409).json(result);
 });
 
-modelsRouter.delete('/models/:id', requireApiGatewayAuth('admin'), async (req, res) => {
+modelsRouter.delete('/models/:id', requireAdminConsoleAuth, async (req, res) => {
   const db = await getDb();
   const model = await db.getModelById(String(req.params.id));
   if (!model) return res.status(404).json({ error: 'Model not found' });
