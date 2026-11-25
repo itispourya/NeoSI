@@ -75,7 +75,7 @@ class DurableAgentRuntime {
         toolId: s.toolId,
         dependsOn: s.dependsOn,
       })),
-      checkpoint: { lastCompletedStepIndex: -1, evidenceSnippets: [] },
+      checkpoint: { lastCompletedStepIndex: -1, evidenceSnippets: [], executionScopes: input.scopes || ['read'] },
       result: null,
       verification: null,
       error: null,
@@ -145,17 +145,22 @@ class DurableAgentRuntime {
     return updated;
   }
 
-  async resumeTask(taskId: string, tenantId: string, actor = 'system:resume'): Promise<TaskRecord | null> {
+  async resumeTask(taskId: string, tenantId: string, actor = 'system:resume', currentScopes: string[] = ['read']): Promise<TaskRecord | null> {
     const db = await getDb();
     const existing = await db.getTaskById(taskId, tenantId);
     if (!existing) return null;
     if (existing.status === 'completed' || existing.status === 'cancelled') return existing;
+    const savedScopes = Array.isArray(existing.checkpoint?.executionScopes)
+      ? (existing.checkpoint.executionScopes as string[])
+      : ['read'];
+    // Resuming can never grant more permissions than the original task or current credential.
+    const effectiveScopes = currentScopes.filter((scope) => savedScopes.includes(scope));
     this.cancelledTaskIds.delete(taskId);
     await db.updateTask(taskId, { status: 'running', error: null });
-    await this.emitEvent(taskId, tenantId, 'task.resumed', { actor });
+    await this.emitEvent(taskId, tenantId, 'task.resumed', { actor, scopes: effectiveScopes });
     if (!this.runningTaskIds.has(taskId)) {
       queueMicrotask(() => {
-        void this.executeTaskLoop(taskId, tenantId, actor, ['read', 'write']);
+        void this.executeTaskLoop(taskId, tenantId, actor, effectiveScopes);
       });
     }
     return db.getTaskById(taskId, tenantId);
@@ -172,7 +177,12 @@ class DurableAgentRuntime {
       });
       if (!this.runningTaskIds.has(task.id)) {
         queueMicrotask(() => {
-          void this.executeTaskLoop(task.id, task.tenant_id, 'system:recovery', ['read', 'write']);
+          void this.executeTaskLoop(
+          task.id,
+          task.tenant_id,
+          'system:recovery',
+          Array.isArray(task.checkpoint?.executionScopes) ? (task.checkpoint.executionScopes as string[]) : ['read']
+        );
         });
       }
     }
@@ -183,7 +193,7 @@ class DurableAgentRuntime {
     taskId: string,
     tenantId: string,
     actor = 'agent-runtime',
-    scopes: string[] = ['read', 'write']
+    scopes: string[] = ['read']
   ): Promise<TaskRecord | null> {
     if (this.runningTaskIds.has(taskId)) {
       const db = await getDb();
@@ -239,11 +249,7 @@ class DurableAgentRuntime {
         const freshSteps = await db.listTaskSteps(task.id, tenantId);
         const depsReady = step.depends_on.every((depIdx) => {
           const dep = freshSteps.find((s) => s.step_index === depIdx);
-          if (!dep) return true;
-          if (step.action_type === 'reason' || step.action_type === 'verify') {
-            return dep.status !== 'pending' && dep.status !== 'running';
-          }
-          return dep.status === 'completed' || dep.status === 'skipped';
+          return Boolean(dep && (dep.status === 'completed' || dep.status === 'skipped'));
         });
         if (!depsReady) continue;
 
@@ -345,7 +351,7 @@ class DurableAgentRuntime {
           });
 
           await db.updateTask(task.id, {
-            checkpoint: { lastCompletedStepIndex: step.step_index, evidenceSnippets },
+            checkpoint: { ...task.checkpoint, lastCompletedStepIndex: step.step_index, evidenceSnippets, executionScopes: scopes },
             usage,
             loop_signature_counts: loopCounts,
           });
@@ -375,36 +381,59 @@ class DurableAgentRuntime {
         toolOutputs,
       });
 
+      const finalSteps = await db.listTaskSteps(task.id, tenantId);
+      const failedSteps = finalSteps.filter((s) => s.status === 'failed');
+      const unresolvedSteps = finalSteps.filter((s) => s.status === 'pending' || s.status === 'running');
+      const hasUsefulOutput = Boolean(answerText.trim() || evidenceSnippets.length > 0);
+      const allStepsSettled = failedSteps.length === 0 && unresolvedSteps.length === 0;
+      const finalStatus = allStepsSettled && finalVerification.passed
+        ? 'completed'
+        : hasUsefulOutput || finalSteps.some((s) => s.status === 'completed')
+          ? 'partial'
+          : 'failed';
+      const executionError = [
+        ...failedSteps.map((s) => `Step ${s.step_index}: ${s.error || 'failed'}`),
+        ...unresolvedSteps.map((s) => `Step ${s.step_index}: blocked by an incomplete dependency`),
+        ...(!finalVerification.passed ? finalVerification.issues : []),
+      ].filter(Boolean).join('; ') || null;
       const finalResult = {
         answer: answerText || evidenceSnippets.join('\n'),
         evidenceCount: evidenceSnippets.length,
         toolCalls: usage.toolCalls,
         verification: finalVerification,
+        completedSteps: finalSteps.filter((s) => s.status === 'completed').length,
+        failedSteps: failedSteps.length,
+        unresolvedSteps: unresolvedSteps.length,
       };
 
       const completed = await db.updateTask(task.id, {
-        status: 'completed',
+        status: finalStatus,
         result: finalResult,
         verification: finalVerification as unknown as Record<string, unknown>,
+        error: finalStatus === 'completed' ? null : executionError || 'Task could not be fully verified.',
         usage: { ...usage, durationMs: Date.now() - startMs },
         loop_signature_counts: loopCounts,
         completed_at: new Date().toISOString(),
       });
 
-      await storeMemory({
-        tenantId,
-        memoryType: 'episodic',
-        topic: 'autonomous-task',
-        title: `Task Completed: ${task.goal.slice(0, 64)}`,
-        content: `Goal: ${task.goal} | steps=${usage.stepsExecuted} | critic=${finalVerification.overallScore}%`,
-        structuredFacts: { taskId: task.id, usage, criticScore: finalVerification.overallScore },
-        reliabilityScore: Number((finalVerification.overallScore / 100).toFixed(2)),
-        importanceScore: 0.72,
-      });
+      if (hasUsefulOutput) {
+        await storeMemory({
+          tenantId,
+          memoryType: 'episodic',
+          topic: 'autonomous-task',
+          title: `Task ${finalStatus}: ${task.goal.slice(0, 64)}`,
+          content: `Goal: ${task.goal} | status=${finalStatus} | steps=${usage.stepsExecuted} | critic=${finalVerification.overallScore}%`,
+          structuredFacts: { taskId: task.id, usage, criticScore: finalVerification.overallScore, status: finalStatus },
+          reliabilityScore: Number((finalVerification.overallScore / 100).toFixed(2)),
+          importanceScore: 0.72,
+        });
+      }
 
-      await this.emitEvent(task.id, tenantId, 'task.completed', {
+      const eventType = finalStatus === 'completed' ? 'task.completed' : finalStatus === 'partial' ? 'task.partial' : 'task.failed';
+      await this.emitEvent(task.id, tenantId, eventType, {
         usage: completed?.usage,
         verification: finalVerification,
+        error: completed?.error,
       });
 
       return completed;
