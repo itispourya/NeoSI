@@ -59,6 +59,7 @@ memoryRouter.get('/memory/search', requireApiGatewayAuth('read'), async (req, re
 
   const emb = await embeddingEngine.embed(q);
   const matches = await db.searchMemories(emb.vector, {
+    queryEmbeddingModel: emb.model,
     tenantId: req.neoAuth!.tenant.id,
     includeGlobal,
     memoryType: memoryTypeRaw as MemoryType | undefined,
@@ -72,8 +73,8 @@ memoryRouter.get('/memory/search', requireApiGatewayAuth('read'), async (req, re
   });
 });
 
-memoryRouter.post('/memory/consolidate', requireApiGatewayAuth('write'), async (_req, res) => {
-  const summary = await runMemoryConsolidation();
+memoryRouter.post('/memory/consolidate', requireApiGatewayAuth('write'), async (req, res) => {
+  const summary = await runMemoryConsolidation(req.neoAuth!.tenant.id);
   res.json(summary);
 });
 
