@@ -11,7 +11,7 @@ import { runAutonomousResearch } from '../knowledge/research.ts';
 import { extractTextFromPdfBuffer } from '../multimodal/pdf.ts';
 import { distillTextLocally } from '../neo/sovereignEngine.ts';
 import { fetchCleanUrlContent } from '../search/webSearch.ts';
-import { requireApiGatewayAuth } from '../security/auth.ts';
+import { requireAdminConsoleAuth, requireApiGatewayAuth } from '../security/auth.ts';
 
 export const knowledgeRouter = Router();
 
@@ -181,7 +181,7 @@ const skillCreateSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
-knowledgeRouter.post('/skills', requireApiGatewayAuth('admin'), async (req, res) => {
+knowledgeRouter.post('/skills', requireAdminConsoleAuth, async (req, res) => {
   const parsed = skillCreateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid skill payload', issues: parsed.error.issues });
   const db = await getDb();
@@ -204,7 +204,7 @@ knowledgeRouter.get('/skills/:id', requireApiGatewayAuth('read'), async (req, re
   return res.json({ skill });
 });
 
-knowledgeRouter.patch('/skills/:id', requireApiGatewayAuth('admin'), async (req, res) => {
+knowledgeRouter.patch('/skills/:id', requireAdminConsoleAuth, async (req, res) => {
   const db = await getDb();
   const updated = await db.updateSkillById(String(req.params.id), {
     title: typeof req.body?.title === 'string' ? req.body.title : undefined,
@@ -216,7 +216,7 @@ knowledgeRouter.patch('/skills/:id', requireApiGatewayAuth('admin'), async (req,
   return res.json({ skill: updated });
 });
 
-knowledgeRouter.post('/skills/:id/evaluate', requireApiGatewayAuth('admin'), async (req, res) => {
+knowledgeRouter.post('/skills/:id/evaluate', requireAdminConsoleAuth, async (req, res) => {
   const result = await evaluateSkill(String(req.params.id));
   if (!result.skill) return res.status(404).json({ error: 'Skill not found' });
   return res.json(result);
