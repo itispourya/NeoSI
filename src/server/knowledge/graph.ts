@@ -128,6 +128,8 @@ export class NeoKnowledgeGraph {
     edges: GraphRelationshipRecord[];
   }> {
     const db = await getDb();
+    const startEntity = await db.getEntityById(startEntityId, tenantId);
+    if (!startEntity) return { nodes: [], edges: [] };
     const allEntities = await db.listEntities(tenantId, { limit: 300 });
     const entityMap = new Map(allEntities.map((e) => [e.id, e]));
     const visited = new Set<string>([startEntityId]);
@@ -139,8 +141,10 @@ export class NeoKnowledgeGraph {
       for (const nodeId of frontier) {
         const rels = await db.listRelationships(tenantId, nodeId, 50);
         for (const r of rels) {
-          collectedEdges.push(r);
           const neighbor = r.source_entity_id === nodeId ? r.target_entity_id : r.source_entity_id;
+          // Ignore legacy or malformed edges that point outside this tenant's entity set.
+          if (!entityMap.has(r.source_entity_id) || !entityMap.has(r.target_entity_id)) continue;
+          collectedEdges.push(r);
           if (!visited.has(neighbor)) {
             visited.add(neighbor);
             nextFrontier.push(neighbor);
