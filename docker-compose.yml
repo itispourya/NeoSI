@@ -27,7 +27,7 @@ services:
     image: ollama/ollama:latest
     profiles: ["dev", "gpu-single"]
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - neo_ollama:/root/.ollama
 
@@ -36,7 +36,7 @@ services:
     profiles: ["gpu-multi"]
     command: --model Qwen/Qwen2.5-14B-Instruct --tensor-parallel-size 2 --port 8000
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     deploy:
       resources:
         reservations:
