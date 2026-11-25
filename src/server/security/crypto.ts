@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
+import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 
 /**
@@ -202,6 +204,86 @@ export interface SafeFetchOptions {
   lookupFn?: (hostname: string) => Promise<Array<{ address: string; family: number }>>;
 }
 
+function pinnedHttpFetch(
+  url: URL,
+  resolvedIps: string[],
+  opts: SafeFetchOptions,
+  timeoutMs: number,
+  maxBytes: number
+): Promise<Response> {
+  const address = resolvedIps[0];
+  const family = address ? net.isIP(address) : 0;
+  if (!address || !family) return Promise.reject(new Error('No validated public IP available for the outbound connection.'));
+
+  return new Promise((resolve, reject) => {
+    const transport = url.protocol === 'https:' ? https : http;
+    const hostname = url.hostname.replace(/^\\[|\\]$/g, '');
+    const headers = { 'Accept-Encoding': 'identity', ...(opts.headers || {}), Host: url.host };
+    let settled = false;
+    let receivedBytes = 0;
+    const chunks: Buffer[] = [];
+    let timer: ReturnType<typeof setTimeout>;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
+
+    // Pin the socket lookup to the IP already checked by validateExternalUrlAsync.
+    const pinnedLookup = ((_host: string, _options: unknown, callback: (...args: unknown[]) => void) => {
+      callback(null, address, family);
+    }) as never;
+    const request = transport.request({
+      protocol: url.protocol,
+      hostname,
+      port: url.port || undefined,
+      path: `${url.pathname}${url.search}`,
+      method: opts.method || 'GET',
+      headers,
+      lookup: pinnedLookup,
+      ...(url.protocol === 'https:' && !net.isIP(hostname) ? { servername: hostname } : {}),
+    }, (response) => {
+      const declaredLength = Number(response.headers['content-length'] || 0);
+      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+        request.destroy(new Error(`Response exceeded max allowed size (${maxBytes} bytes) from ${url.toString()}`));
+        return;
+      }
+      response.on('data', (chunk: Buffer | string) => {
+        const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        receivedBytes += data.byteLength;
+        if (receivedBytes > maxBytes) {
+          request.destroy(new Error(`Response exceeded max allowed size (${maxBytes} bytes) from ${url.toString()}`));
+          return;
+        }
+        chunks.push(data);
+      });
+      response.on('error', fail);
+      response.on('aborted', () => fail(new Error(`Outbound response aborted by ${url.host}`)));
+      response.on('end', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const responseHeaders = new Headers();
+        for (const [key, value] of Object.entries(response.headers)) {
+          if (value !== undefined) responseHeaders.set(key, Array.isArray(value) ? value.join(', ') : value);
+        }
+        const status = response.statusCode || 502;
+        const body = Buffer.concat(chunks);
+        resolve(new Response([204, 205, 304].includes(status) ? null : body, {
+          status,
+          statusText: response.statusMessage,
+          headers: responseHeaders,
+        }));
+      });
+    });
+    request.on('error', fail);
+    timer = setTimeout(() => request.destroy(new Error(`Outbound request timed out after ${timeoutMs}ms`)), timeoutMs);
+    timer.unref?.();
+    if (opts.body) request.write(opts.body);
+    request.end();
+  });
+}
 /**
  * SSRF-hardened external HTTP fetcher:
  * 1. Validates scheme, hostname, and resolved DNS IP addresses before connecting.
@@ -221,8 +303,6 @@ export async function safeExternalFetch(
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 0) {
     throw new Error('Invalid external fetch timeout or response size limit.');
   }
-  const fetchFn = opts.fetchImpl ?? fetch;
-
   let currentUrl = rawUrl;
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const check = await validateExternalUrlAsync(currentUrl, opts.lookupFn);
@@ -230,13 +310,15 @@ export async function safeExternalFetch(
       throw new Error(`SSRF blocked URL '${currentUrl}': ${check.reason}`);
     }
 
-    const res = await fetchFn(check.url.toString(), {
-      method: opts.method ?? 'GET',
-      headers: opts.headers,
-      body: opts.body,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    const res = opts.fetchImpl
+      ? await opts.fetchImpl(check.url.toString(), {
+          method: opts.method ?? 'GET',
+          headers: opts.headers,
+          body: opts.body,
+          redirect: 'manual',
+          signal: AbortSignal.timeout(timeoutMs),
+        })
+      : await pinnedHttpFetch(check.url, check.resolvedIps || [], opts, timeoutMs, maxBytes);
 
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
