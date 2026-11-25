@@ -59,6 +59,38 @@ test('7-layer memory storage, temporal superseding, and consolidation work persi
   assert.ok(summary.consolidatedSemantic >= 1);
 });
 
+test('Dynamic API slugs and call counters remain isolated by workspace', async () => {
+  const db = await getDb();
+  const base = {
+    tenant_id: 'forge-tenant-a',
+    slug: 'tenant-isolated-endpoint',
+    name: 'Tenant A Endpoint',
+    description: 'Isolation regression test',
+    method: 'POST' as const,
+    input_schema: { type: 'object' as const },
+    output_schema: { type: 'object' as const },
+    handler_code: 'function handle(input) { return input; }',
+    test_code: "test('identity', () => { assert.equal(handle({ value: 1 }).value, 1); });",
+    test_report: { passed: 1, failed: 0, total: 1, durationMs: 1, details: [] },
+    openapi_spec: {},
+    rate_limit_rpm: 60,
+    enabled: true,
+  };
+  const created = await db.upsertDynamicApi(base);
+  assert.equal(created.tenant_id, 'forge-tenant-a');
+
+  await assert.rejects(
+    () => db.upsertDynamicApi({ ...base, tenant_id: 'forge-tenant-b', name: 'Tenant B takeover' }),
+    /reserved by another workspace/i
+  );
+
+  await db.incrementDynamicApiCalls(base.slug, 'forge-tenant-b');
+  assert.equal((await db.getDynamicApiBySlug(base.slug, 'forge-tenant-a'))?.call_count, 0);
+
+  await db.incrementDynamicApiCalls(base.slug, 'forge-tenant-a');
+  assert.equal((await db.getDynamicApiBySlug(base.slug, 'forge-tenant-a'))?.call_count, 1);
+});
+
 test('Knowledge Graph entity resolution, contradiction detection, and BFS traversal', async () => {
   const src = await knowledgeGraph.upsertEntity({ tenantId: 'global', name: 'Neos Core', entityType: 'system' });
   const tgtA = await knowledgeGraph.upsertEntity({ tenantId: 'global', name: 'Ollama Runtime', entityType: 'runtime' });
@@ -169,7 +201,8 @@ test('ModelRegistry checks hardware/licenses & Layer A/C/D evolution run end-to-
   assert.equal(skillEval.passed, true);
 
   const proposal = await runCodeEvolutionProposal('unit-test-evolution');
-  assert.ok(['sandbox_passed', 'merged'].includes(proposal.status));
+  assert.equal(proposal.status, 'sandbox_passed');
+  assert.equal(proposal.auto_eligible, false);
   assert.ok(proposal.test_results.passed >= 2);
   assert.ok(proposal.benchmark_before.accuracyScore > 0);
   assert.ok(proposal.benchmark_after.accuracyScore > 0);
@@ -181,4 +214,7 @@ test('ModelRegistry checks hardware/licenses & Layer A/C/D evolution run end-to-
   });
   assert.ok(trainJob.dataset_size >= 1);
   assert.ok(trainJob.dataset_path && fs.existsSync(trainJob.dataset_path));
+  assert.equal(trainJob.status, 'dataset_ready_training_not_started');
+  assert.equal(trainJob.metrics.trainingStarted, false);
+  assert.equal(trainJob.metrics.adapterProduced, false);
 });
