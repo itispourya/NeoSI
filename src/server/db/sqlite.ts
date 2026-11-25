@@ -1118,6 +1118,17 @@ export class SqliteNeoDatabase implements NeoDatabase {
     return rec;
   }
 
+  async getEntityById(id: string, tenantId: string): Promise<GraphEntityRecord | null> {
+    const r = this.db.prepare('SELECT * FROM entities WHERE id = ? AND tenant_id = ?').get(id, tenantId) as Record<string, unknown> | undefined;
+    if (!r) return null;
+    return {
+      ...(r as unknown as GraphEntityRecord),
+      aliases: parseJson<string[]>(r.aliases, []),
+      attributes: parseJson<Record<string, unknown>>(r.attributes, {}),
+      embedding: parseJson<number[]>(r.embedding, []),
+    };
+  }
+
   async listEntities(tenantId: string, opts?: { entityType?: string; query?: string; limit?: number }): Promise<GraphEntityRecord[]> {
     const clauses = ['tenant_id = ?'];
     const params: (string | number)[] = [tenantId];
@@ -2025,13 +2036,15 @@ export class SqliteNeoDatabase implements NeoDatabase {
       );
   }
 
-  async listTelemetry(limit = 50): Promise<LlmTelemetryRecord[]> {
-    const rows = this.db.prepare('SELECT * FROM llm_telemetry ORDER BY created_at DESC LIMIT ?').all(limit) as Record<string, unknown>[];
+  async listTelemetry(limit = 50, tenantId?: string): Promise<LlmTelemetryRecord[]> {
+    const rows = tenantId
+      ? (this.db.prepare('SELECT * FROM llm_telemetry WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?').all(tenantId, limit) as Record<string, unknown>[])
+      : (this.db.prepare('SELECT * FROM llm_telemetry ORDER BY created_at DESC LIMIT ?').all(limit) as Record<string, unknown>[]);
     return rows.map((r) => ({ ...(r as unknown as LlmTelemetryRecord), success: Boolean(r.success) }));
   }
 
-  async getTelemetrySummary() {
-    const rows = await this.listTelemetry(500);
+  async getTelemetrySummary(tenantId?: string) {
+    const rows = await this.listTelemetry(500, tenantId);
     const totalCalls = rows.length;
     const successes = rows.filter((r) => r.success).length;
     const totalTokens = rows.reduce((s, r) => s + r.prompt_tokens + r.completion_tokens, 0);
