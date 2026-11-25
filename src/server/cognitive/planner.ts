@@ -247,7 +247,7 @@ export class TaskPlanner {
 
       const steps = this.finalizePlan(gather, budgets);
       const validation = this.validatePlan(steps, budgets);
-      if (!validation.valid || steps.length <= 2) return fallback;
+      if (!validation.valid || gather.length <= 1) return fallback;
       return { steps, budgets, valid: true, validationErrors: [] };
     } catch {
       // Model planning is an optimization, never a dependency for basic safe operation.
