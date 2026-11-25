@@ -188,7 +188,8 @@ export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
                     Before: {u.benchmark_before.accuracyScore}% · {u.benchmark_before.avgLatencyMs}ms
                   </div>
                   <div className="p-2 bg-[#111827] border border-slate-800 rounded">
-                    After: {u.benchmark_after.accuracyScore}% · {u.benchmark_after.avgLatencyMs}ms
+                    Candidate integration benchmark: not run
+                    <div className="mt-1 text-slate-400">Standalone tests: {u.test_results.passed}/{u.test_results.total}</div>
                   </div>
                 </div>
                 <pre className="p-2.5 bg-[#111827] border border-slate-800 rounded font-mono text-[11px] text-slate-300 overflow-x-auto max-h-40">
