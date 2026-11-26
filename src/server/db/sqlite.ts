@@ -1286,6 +1286,44 @@ export class SqliteNeoDatabase implements NeoDatabase {
     return merged;
   }
 
+  async updateTaskIfStatus(
+    id: string,
+    tenantId: string,
+    expectedStatuses: TaskStatus[],
+    patch: Parameters<NeoDatabase['updateTask']>[1]
+  ): Promise<TaskRecord | null> {
+    if (expectedStatuses.length === 0) return null;
+    const columns: Record<string, { column: string; serialize: (value: unknown) => unknown }> = {
+      status: { column: 'status', serialize: (v) => v },
+      plan: { column: 'plan', serialize: (v) => JSON.stringify(v) },
+      checkpoint: { column: 'checkpoint', serialize: (v) => JSON.stringify(v) },
+      result: { column: 'result', serialize: (v) => v === null ? null : JSON.stringify(v) },
+      verification: { column: 'verification', serialize: (v) => v === null ? null : JSON.stringify(v) },
+      error: { column: 'error', serialize: (v) => v },
+      usage: { column: 'usage', serialize: (v) => JSON.stringify(v) },
+      loop_signature_counts: { column: 'loop_signature_counts', serialize: (v) => JSON.stringify(v) },
+      completed_at: { column: 'completed_at', serialize: (v) => v },
+    };
+    const assignments: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(patch)) {
+      const definition = columns[key];
+      if (!definition) continue;
+      assignments.push(`${definition.column} = ?`);
+      values.push(definition.serialize(value));
+    }
+    if (assignments.length === 0) return this.getTaskById(id, tenantId);
+    assignments.push('updated_at = ?');
+    values.push(new Date().toISOString());
+    const placeholders = expectedStatuses.map(() => '?').join(', ');
+    const result = this.db.prepare(
+      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND tenant_id = ? AND status IN (${placeholders})`
+    ).run(...values, id, tenantId, ...expectedStatuses);
+    if (Number(result.changes) === 0) return null;
+    const raw = this.db.prepare('SELECT * FROM tasks WHERE id = ? AND tenant_id = ?').get(id, tenantId) as Record<string, unknown> | undefined;
+    return raw ? this.mapTaskRow(raw) : null;
+  }
+
   async upsertTaskStep(input: Omit<TaskStepRecord, 'id'> & { id?: string }): Promise<TaskStepRecord> {
     const existing = input.id
       ? (this.db.prepare('SELECT id FROM task_steps WHERE id = ?').get(input.id) as { id: string } | undefined)
