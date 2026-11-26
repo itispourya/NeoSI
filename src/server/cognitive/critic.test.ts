@@ -29,6 +29,30 @@ test('critic requires deterministic tool evidence for arithmetic requests', () =
   assert.equal(verdict.passed, false);
 });
 
+test('critic does not accept successful memory search as external research evidence', () => {
+  const verdict = criticEngine.verify({
+    goal: 'Research the latest model release and compare current pricing',
+    draftResponse: 'The model has a recent release and competitive pricing.',
+    evidenceSnippets: ['Prior internal memory about the model.'],
+    toolOutputs: [{ toolId: 'memory_search', ok: true, output: { matches: 3 } }],
+  });
+  assert.equal(verdict.passed, false);
+  assert.ok(verdict.issues.some((issue) => issue.includes('external evidence')));
+});
+
+test('critic accepts external research only when citations are present', () => {
+  const verdict = criticEngine.verify({
+    goal: 'Research current model release status and cite sources',
+    draftResponse: 'The release status is documented in the retrieved source.',
+    toolOutputs: [{
+      toolId: 'web_research',
+      ok: true,
+      output: { citationCount: 1, citations: [{ url: 'https://example.com/source' }] },
+    }],
+  });
+  assert.equal(verdict.passed, true);
+});
+
 test('critic can pass a general explanatory response without requiring web sources', () => {
   const verdict = criticEngine.verify({
     goal: 'Explain what a database index does',
