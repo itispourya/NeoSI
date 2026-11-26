@@ -10,15 +10,11 @@ import { requireApiGatewayAuth } from '../security/auth.ts';
 export const systemRouter = Router();
 
 systemRouter.get('/health', async (_req, res) => {
-  const db = await getDb();
-  const memCounts = await db.countMemories();
+  // Public liveness endpoint: do not expose tenant memory volume, task activity, or infrastructure details.
   res.json({
     status: 'ok',
     service: 'neo',
     version: '2.0.0',
-    storage: db.mode,
-    memoryCount: memCounts.total,
-    activeTasks: agentRuntime.getActiveTaskCount(),
     timestamp: new Date().toISOString(),
   });
 });
@@ -80,15 +76,6 @@ systemRouter.get('/metrics', requireApiGatewayAuth('read'), async (req, res) => 
       recentExecutions: toolExecutions.length,
       successRate: toolExecutions.length ? Number(((toolsOk / toolExecutions.length) * 100).toFixed(1)) : 100,
     },
-    scheduler: {
-      jobs: scheduledJobs.map((j) => ({
-        id: j.id,
-        jobKind: j.job_kind,
-        enabled: j.enabled,
-        lastStatus: j.last_status,
-        runCount: j.run_count,
-        nextRunAt: j.next_run_at,
-      })),
-    },
+
   });
 });
