@@ -1293,22 +1293,23 @@ export class SqliteNeoDatabase implements NeoDatabase {
     patch: Parameters<NeoDatabase['updateTask']>[1]
   ): Promise<TaskRecord | null> {
     if (expectedStatuses.length === 0) return null;
-    const columns: Record<string, { column: string; serialize: (value: unknown) => unknown }> = {
-      status: { column: 'status', serialize: (v) => v },
-      plan: { column: 'plan', serialize: (v) => JSON.stringify(v) },
-      checkpoint: { column: 'checkpoint', serialize: (v) => JSON.stringify(v) },
-      result: { column: 'result', serialize: (v) => v === null ? null : JSON.stringify(v) },
-      verification: { column: 'verification', serialize: (v) => v === null ? null : JSON.stringify(v) },
-      error: { column: 'error', serialize: (v) => v },
-      usage: { column: 'usage', serialize: (v) => JSON.stringify(v) },
-      loop_signature_counts: { column: 'loop_signature_counts', serialize: (v) => JSON.stringify(v) },
-      completed_at: { column: 'completed_at', serialize: (v) => v },
+    type SqlValue = null | string | number | bigint | Uint8Array;
+    const columns: Record<string, { column: string; serialize: (value: unknown) => SqlValue }> = {
+      status: { column: 'status', serialize: (v) => String(v) },
+      plan: { column: 'plan', serialize: (v) => JSON.stringify(v) ?? null },
+      checkpoint: { column: 'checkpoint', serialize: (v) => JSON.stringify(v) ?? null },
+      result: { column: 'result', serialize: (v) => v === null ? null : JSON.stringify(v) ?? null },
+      verification: { column: 'verification', serialize: (v) => v === null ? null : JSON.stringify(v) ?? null },
+      error: { column: 'error', serialize: (v) => v === null ? null : String(v) },
+      usage: { column: 'usage', serialize: (v) => JSON.stringify(v) ?? null },
+      loop_signature_counts: { column: 'loop_signature_counts', serialize: (v) => JSON.stringify(v) ?? null },
+      completed_at: { column: 'completed_at', serialize: (v) => v === null ? null : String(v) },
     };
     const assignments: string[] = [];
-    const values: unknown[] = [];
+    const values: SqlValue[] = [];
     for (const [key, value] of Object.entries(patch)) {
       const definition = columns[key];
-      if (!definition) continue;
+      if (!definition || value === undefined) continue;
       assignments.push(`${definition.column} = ?`);
       values.push(definition.serialize(value));
     }
