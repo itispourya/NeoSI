@@ -150,7 +150,7 @@ export async function requireAdminConsoleAuth(req: Request, res: Response, next:
   const limit = checkRateLimit(`admin:${activeTenant.id}`, activeTenant.rate_limit_rpm);
   res.setHeader('X-RateLimit-Limit', String(limit.limit));
   res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
-  res.setHeader('X-RateLimit-Reset', String(Math.ceil(limit.resetMs / 1000)));
+  res.setHeader('X-RateLimit-Reset', String(Math.ceil((Date.now() + limit.resetMs) / 1000)));
   if (!limit.allowed) return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
 
   req.neoAuth = {
@@ -185,7 +185,7 @@ export function requireApiGatewayAuth(requiredScope = 'read') {
       const limit = checkRateLimit(`key:${apiKey.id}`, tenant.rate_limit_rpm);
       res.setHeader('X-RateLimit-Limit', String(limit.limit));
       res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
-      res.setHeader('X-RateLimit-Reset', String(Math.ceil(limit.resetMs / 1000)));
+      res.setHeader('X-RateLimit-Reset', String(Math.ceil((Date.now() + limit.resetMs) / 1000)));
       if (!limit.allowed) {
         return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
       }
@@ -210,7 +210,7 @@ export function requireApiGatewayAuth(requiredScope = 'read') {
       const limit = checkRateLimit(`admin:${activeTenant.id}`, activeTenant.rate_limit_rpm);
       res.setHeader('X-RateLimit-Limit', String(limit.limit));
       res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
-      res.setHeader('X-RateLimit-Reset', String(Math.ceil(limit.resetMs / 1000)));
+      res.setHeader('X-RateLimit-Reset', String(Math.ceil((Date.now() + limit.resetMs) / 1000)));
       if (!limit.allowed) {
         return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
       }
