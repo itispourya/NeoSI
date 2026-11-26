@@ -666,6 +666,9 @@ export class SqliteNeoDatabase implements NeoDatabase {
     const now = new Date().toISOString();
     const embDim = input.embedding_dim ?? input.embedding.length;
     const embModel = input.embedding_model || 'neo-embed-local-v2';
+    if (embDim !== input.embedding.length) {
+      throw new Error('Embedding metadata dimension does not match the supplied vector length.');
+    }
     const rec: MemoryRecord = {
       id: uuidv4(),
       tenant_id: input.tenant_id,
@@ -740,6 +743,15 @@ export class SqliteNeoDatabase implements NeoDatabase {
   ): Promise<MemoryRecord | null> {
     const existing = await this.getMemoryById(id, tenantId, false);
     if (!existing) return null;
+    if (patch.embedding && patch.embedding_dim !== undefined && patch.embedding_dim !== patch.embedding.length) {
+      throw new Error('Embedding metadata dimension does not match the supplied vector length.');
+    }
+    if (!patch.embedding && (
+      (patch.embedding_model !== undefined && patch.embedding_model !== existing.embedding_model) ||
+      (patch.embedding_dim !== undefined && patch.embedding_dim !== existing.embedding_dim)
+    )) {
+      throw new Error('Embedding model or dimension cannot change without supplying the matching replacement vector.');
+    }
     const merged: MemoryRecord = {
       ...existing,
       ...patch,
