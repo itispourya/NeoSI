@@ -59,6 +59,41 @@ test('7-layer memory storage, temporal superseding, and consolidation work persi
   assert.ok(summary.consolidatedSemantic >= 1);
 });
 
+test('hybrid memory search can retrieve exact lexical matches older than the recent vector window', async () => {
+  const db = await getDb();
+  const vector = new Array<number>(768).fill(1);
+  const base = {
+    tenant_id: 'global',
+    memory_type: 'semantic' as const,
+    topic: 'archive',
+    title: 'Archived note',
+    content: 'Ordinary historical knowledge without the rare lookup phrase.',
+    structured_facts: {},
+    source_url: null,
+    reliability_score: 0.9,
+    freshness_score: 1,
+    embedding: vector,
+    embedding_model: 'test-embedding-space-v1',
+    embedding_dim: 768,
+  };
+  const older = await db.insertMemory({
+    ...base,
+    title: 'Zebra Quasar Ledger Reconciliation',
+    content: 'The zebra quasar ledger phrase identifies the archived reconciliation procedure.',
+  });
+  for (let i = 0; i < 510; i++) {
+    await db.insertMemory({ ...base, title: `Recent noise note ${i}`, content: `Unrelated record ${i} with generic operational details.` });
+  }
+
+  const results = await db.searchMemories(vector, {
+    tenantId: 'global',
+    queryText: 'zebra quasar ledger reconciliation',
+    queryEmbeddingModel: 'test-embedding-space-v1',
+    limit: 5,
+  });
+  assert.ok(results.some((memory) => memory.id === older.id));
+});
+
 test('Dynamic API slugs and call counters remain isolated by workspace', async () => {
   const db = await getDb();
   const base = {
