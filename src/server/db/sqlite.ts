@@ -45,7 +45,7 @@ import type {
   UpgradeStatus,
 } from './schema.ts';
 import { seedInitialData } from './seed.ts';
-import { computeBm25Scores, computeTemporalDecay, cosineSimilarity, hybridRerank } from './vector.ts';
+import { computeBm25Scores, computeTemporalDecay, cosineSimilarity, hybridRerank, tokenizeMultilingual } from './vector.ts';
 
 function parseJson<T>(raw: unknown, fallback: T): T {
   if (raw === null || raw === undefined) return fallback;
@@ -828,19 +828,59 @@ export class SqliteNeoDatabase implements NeoDatabase {
   }
 
   async searchMemories(queryEmbedding: number[], opts?: MemorySearchOptions): Promise<MemorySearchResult[]> {
-    const candidates = await this.listMemories({
+    const recentCandidates = await this.listMemories({
       memoryType: opts?.memoryType,
       tenantId: opts?.tenantId,
       includeGlobal: opts?.includeGlobal ?? false,
       validAt: opts?.validAt,
       limit: 500,
     });
+    const candidateMap = new Map(recentCandidates.map((memory) => [memory.id, memory]));
+    const queryTerms = opts?.queryText
+      ? Array.from(new Set(tokenizeMultilingual(opts.queryText).filter((term) => term.length >= 2))).slice(0, 8)
+      : [];
+
+    if (queryTerms.length > 0) {
+      const clauses = ['deleted_at IS NULL'];
+      const params: (string | number)[] = [];
+      if (opts?.memoryType) {
+        clauses.push('memory_type = ?');
+        params.push(opts.memoryType);
+      }
+      if (opts?.tenantId) {
+        if (opts.includeGlobal) {
+          clauses.push('(tenant_id = ? OR tenant_id = ?)');
+          params.push(opts.tenantId, 'global');
+        } else {
+          clauses.push('tenant_id = ?');
+          params.push(opts.tenantId);
+        }
+      }
+      if (opts?.validAt) {
+        clauses.push('(valid_from IS NULL OR valid_from <= ?) AND (valid_to IS NULL OR valid_to >= ?)');
+        params.push(opts.validAt, opts.validAt);
+      }
+      const tokenClauses = queryTerms.map(() => '(lower(topic) LIKE ? OR lower(title) LIKE ? OR lower(content) LIKE ?)');
+      for (const term of queryTerms) {
+        const pattern = `%${term.toLowerCase()}%`;
+        params.push(pattern, pattern, pattern);
+      }
+      const lexicalRows = this.db.prepare(
+        `SELECT * FROM memories WHERE ${clauses.join(' AND ')} AND (${tokenClauses.join(' OR ')}) ORDER BY created_at DESC LIMIT ?`
+      ).all(...params, 200) as Record<string, unknown>[];
+      for (const row of lexicalRows) {
+        const memory = this.mapMemoryRow(row);
+        if (!candidateMap.has(memory.id)) candidateMap.set(memory.id, memory);
+      }
+    }
+
+    const candidates = Array.from(candidateMap.values());
     if (candidates.length === 0) return [];
     const minScore = opts?.minScore ?? 0.04;
     const bm25 = opts?.queryText
       ? computeBm25Scores(
           opts.queryText,
-          candidates.map((c) => `${c.topic} ${c.title} ${c.content}`)
+          candidates.map((candidate) => `${candidate.topic} ${candidate.title} ${candidate.content}`)
         )
       : candidates.map(() => 0);
 
