@@ -55,6 +55,27 @@ function toPgVectorLiteral(vector: number[]): string | null {
   return `[${vector.map((value) => Number(value).toString()).join(',')}]`;
 }
 
+export function buildPostgresLexicalFilter(
+  terms: string[],
+  startParameterIndex: number
+): { sql: string; params: string[]; nextParameterIndex: number } {
+  if (!Number.isSafeInteger(startParameterIndex) || startParameterIndex < 1) {
+    throw new Error('PostgreSQL parameter indices start at 1.');
+  }
+  const normalized = Array.from(new Set(terms.map((term) => term.trim()).filter(Boolean))).slice(0, 8);
+  const params: string[] = [];
+  const clauses = normalized.map((term) => {
+    const placeholder = `${startParameterIndex + params.length}`;
+    params.push(`%${term}%`);
+    return `(topic ILIKE ${placeholder} OR title ILIKE ${placeholder} OR content ILIKE ${placeholder})`;
+  });
+  return {
+    sql: clauses.length > 0 ? `(${clauses.join(' OR ')})` : 'FALSE',
+    params,
+    nextParameterIndex: startParameterIndex + params.length,
+  };
+}
+
 export class PostgresNeoDatabase implements NeoDatabase {
   public readonly mode = 'postgresql' as const;
   private pool: Pool;
@@ -388,15 +409,9 @@ export class PostgresNeoDatabase implements NeoDatabase {
       ? Array.from(new Set(tokenizeMultilingual(opts.queryText).filter((term) => term.length >= 2))).slice(0, 8)
       : [];
     if (queryTerms.length > 0) {
-      const lexicalClauses = [...baseClauses];
-      const lexicalParams: unknown[] = [...baseParams];
-      const tokenClauses = queryTerms.map((term) => {
-        const parameter = lexicalParams.length + 1;
-        lexicalParams.push(`%${term}%`);
-        return `(topic ILIKE ${parameter} OR title ILIKE ${parameter} OR content ILIKE ${parameter})`;
-      });
-      lexicalClauses.push(`(${tokenClauses.join(' OR ')})`);
-      lexicalParams.push(200);
+      const lexicalFilter = buildPostgresLexicalFilter(queryTerms, baseParams.length + 1);
+      const lexicalClauses = [...baseClauses, lexicalFilter.sql];
+      const lexicalParams: unknown[] = [...baseParams, ...lexicalFilter.params, 200];
       const limitParameter = lexicalParams.length;
       const lexicalResult = await this.pool.query(
         `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding_model, embedding_dim, created_at, 0 AS similarity
