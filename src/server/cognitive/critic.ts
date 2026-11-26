@@ -70,8 +70,17 @@ export class CriticEngine {
 
     // 3. Factual Grounding & Citations
     const evidenceCount = (input.evidenceSnippets?.length || 0) + (input.citations?.length || 0);
-    const successfulTools = (input.toolOutputs || []).filter((t) => t.ok).length;
-    const failedTools = (input.toolOutputs || []).filter((t) => !t.ok).length;
+    const toolOutputs = input.toolOutputs || [];
+    const successfulTools = toolOutputs.filter((t) => t.ok).length;
+    const failedTools = toolOutputs.filter((t) => !t.ok).length;
+    const successfulExternalResearch = toolOutputs.some((tool) => {
+      if (!tool.ok || !['web_research', 'web_search', 'search_web', 'fetch_url'].includes(tool.toolId)) return false;
+      const output = tool.output || {};
+      const citations = Array.isArray(output.citations) ? output.citations.length : 0;
+      const citationCount = typeof output.citationCount === 'number' ? output.citationCount : 0;
+      return citations > 0 || citationCount > 0;
+    });
+    const hasExternalEvidence = (input.citations?.length || 0) > 0 || successfulExternalResearch;
     const normalizedGoal = input.goal.toLowerCase();
     const requiresExternalEvidence =
       /\b(latest|today|current|news|research|source|sources|citation|cite|compare|online|web|price|pricing|law|regulation|release|version|status)\b/i.test(normalizedGoal) ||
@@ -79,7 +88,8 @@ export class CriticEngine {
     const arithmeticRequested = /\d+\s*[+\-*/]\s*\d+/.test(input.goal);
     const arithmeticToolSucceeded = (input.toolOutputs || []).some((tool) => tool.toolId === 'math_evaluate' && tool.ok);
     let factualGrounding = evidenceCount > 0 || successfulTools > 0 ? 0.92 : requiresExternalEvidence ? 0.25 : 0.55;
-    if (requiresExternalEvidence && evidenceCount === 0 && successfulTools === 0) {
+    if (requiresExternalEvidence && !hasExternalEvidence) {
+      factualGrounding = Math.min(factualGrounding, 0.25);
       issues.push('The request requires current or external evidence, but no verified source or successful research tool output was available.');
       recommendations.push('Retry evidence acquisition or explicitly qualify the answer as unverified.');
     }
@@ -113,8 +123,11 @@ export class CriticEngine {
       ).toFixed(1)
     );
 
-    const missingRequiredEvidence = requiresExternalEvidence && evidenceCount === 0 && successfulTools === 0;
-    const failedAllTools = failedTools > 0 && successfulTools === 0;
+    const missingRequiredEvidence = requiresExternalEvidence && !hasExternalEvidence;
+    const failedAllTools = (failedTools > 0 && successfulTools === 0) ||
+      (requiresExternalEvidence && !hasExternalEvidence && toolOutputs.some((tool) =>
+        ['web_research', 'web_search', 'search_web', 'fetch_url'].includes(tool.toolId) && !tool.ok
+      ));
     const missingArithmeticCheck = arithmeticRequested && !arithmeticToolSucceeded;
     const passed =
       safety >= 0.7 &&
