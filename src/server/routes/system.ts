@@ -32,11 +32,12 @@ systemRouter.get('/ready', async (_req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
+    console.error('[Neo Readiness] Database readiness probe failed:', err);
     res.status(503).json({
       ready: false,
       status: 'degraded',
       service: 'neo',
-      error: err instanceof Error ? err.message : 'Database readiness probe failed',
+      error: 'readiness_check_failed',
       timestamp: new Date().toISOString(),
     });
   }
