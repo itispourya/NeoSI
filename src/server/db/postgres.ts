@@ -642,6 +642,42 @@ export class PostgresNeoDatabase implements NeoDatabase {
     return rows[0] || null;
   }
 
+  async updateTaskIfStatus(
+    id: string,
+    tenantId: string,
+    expectedStatuses: TaskStatus[],
+    patch: Parameters<NeoDatabase['updateTask']>[1]
+  ): Promise<TaskRecord | null> {
+    if (expectedStatuses.length === 0) return null;
+    const columns: Record<string, { column: string; serialize: (value: unknown) => unknown }> = {
+      status: { column: 'status', serialize: (v) => v },
+      plan: { column: 'plan', serialize: (v) => JSON.stringify(v) },
+      checkpoint: { column: 'checkpoint', serialize: (v) => JSON.stringify(v) },
+      result: { column: 'result', serialize: (v) => v === null ? null : JSON.stringify(v) },
+      verification: { column: 'verification', serialize: (v) => v === null ? null : JSON.stringify(v) },
+      error: { column: 'error', serialize: (v) => v },
+      usage: { column: 'usage', serialize: (v) => JSON.stringify(v) },
+      loop_signature_counts: { column: 'loop_signature_counts', serialize: (v) => JSON.stringify(v) },
+      completed_at: { column: 'completed_at', serialize: (v) => v },
+    };
+    const assignments: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(patch)) {
+      const definition = columns[key];
+      if (!definition) continue;
+      values.push(definition.serialize(value));
+      assignments.push(`${definition.column} = ${values.length}`);
+    }
+    if (assignments.length === 0) return this.getTaskById(id, tenantId);
+    assignments.push('updated_at = NOW()');
+    values.push(id, tenantId, expectedStatuses);
+    const { rows } = await this.pool.query(
+      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ${values.length - 2} AND tenant_id = ${values.length - 1} AND status = ANY(${values.length}::text[]) RETURNING *`,
+      values
+    );
+    return rows[0] || null;
+  }
+
   async upsertTaskStep(input: Omit<TaskStepRecord, 'id'> & { id?: string }): Promise<TaskStepRecord> {
     const existing = await this.pool.query('SELECT id FROM task_steps WHERE task_id = $1 AND step_index = $2', [input.task_id, input.step_index]);
     if (existing.rows[0]) {
