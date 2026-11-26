@@ -18,12 +18,27 @@ jobs:
   validate:
     name: Typecheck, tests, and production build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: neo
+          POSTGRES_PASSWORD: ci-postgres-password
+          POSTGRES_DB: neo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U neo -d neo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       NODE_ENV: test
       NEO_SESSION_SECRET: ci-only-secret-at-least-32-bytes-long
       NEO_SCHEDULER_ENABLED: "false"
       SQLITE_DB_PATH: ./data/ci.sqlite
+      NEO_TEST_POSTGRES_URL: postgresql://neo:ci-postgres-password@localhost:5432/neo
 
     steps:
       - name: Checkout
@@ -45,6 +60,14 @@ jobs:
 
       - name: Production frontend build
         run: bun run build
+
+      - name: Validate Docker Compose configuration
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password
+          REDIS_PASSWORD: ci-redis-password
+          NEO_SESSION_SECRET: ci-session-secret-at-least-32-bytes-long
+          NEO_ADMIN_SETUP_TOKEN: ci-admin-setup-token-at-least-32-bytes-long
+        run: docker compose config --quiet
 
       - name: Production Docker image build
         run: docker build --tag neosi-ci .
