@@ -1,6 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildPostgresLexicalFilter } from './postgres.ts';
+import { buildPostgresLexicalFilter, buildPostgresMemoryFilters } from './postgres.ts';
+
+test('PostgreSQL memory filters bind tenant and valid-time parameters', () => {
+  const filters = buildPostgresMemoryFilters({
+    memoryType: 'semantic',
+    tenantId: 'tenant-42',
+    includeGlobal: true,
+    validAt: '2026-11-26T00:00:00.000Z',
+  });
+  assert.deepEqual(filters.clauses, [
+    'deleted_at IS NULL',
+    'memory_type = $1',
+    '(tenant_id = $2 OR tenant_id = $3)',
+    '(valid_from IS NULL OR valid_from <= $4) AND (valid_to IS NULL OR valid_to >= $4)',
+  ]);
+  assert.deepEqual(filters.params, ['semantic', 'tenant-42', 'global', '2026-11-26T00:00:00.000Z']);
+  assert.equal(filters.nextParameterIndex, 5);
+});
+
+test('PostgreSQL memory filters do not add tenant or date conditions when omitted', () => {
+  const filters = buildPostgresMemoryFilters();
+  assert.deepEqual(filters.clauses, ['deleted_at IS NULL']);
+  assert.deepEqual(filters.params, []);
+  assert.equal(filters.nextParameterIndex, 1);
+});
 
 test('PostgreSQL lexical filter uses positional bind placeholders', () => {
   const filter = buildPostgresLexicalFilter(['zebra', 'quasar'], 3);
