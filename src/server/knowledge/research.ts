@@ -142,10 +142,9 @@ export async function runAutonomousResearch(input: {
     summary = `No external sources reached for "${input.query}" (offline environment or zero public hits). Local memory & skills remain searchable.`;
   }
 
-  const avgReliability =
-    allSources.length > 0
-      ? Number((allSources.reduce((s, x) => s + x.reliabilityScore, 0) / allSources.length).toFixed(2))
-      : 0.3;
+  const avgReliability = allSources.length > 0
+    ? Number((allSources.reduce((s, x) => s + x.reliabilityScore, 0) / allSources.length).toFixed(2))
+    : 0;
 
   const citations = allSources.map((s) => ({
     title: s.title,
@@ -159,13 +158,15 @@ export async function runAutonomousResearch(input: {
     tenant_id: input.tenantId,
     query: input.query,
     sub_questions: subQuestions,
-    status: 'completed',
+    status: allSources.length > 0 ? 'completed' : 'failed',
     summary,
     findings,
     contradictions,
     citations,
     confidence: avgReliability,
   });
+
+  if (allSources.length === 0) return report;
 
   for (const src of allSources.slice(0, 3)) {
     await storeMemory({
