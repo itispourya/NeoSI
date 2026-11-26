@@ -169,7 +169,6 @@ class DurableAgentRuntime {
       : ['read']);
     // A new credential can only recover the intersection of its current scopes and the original grant.
     const effectiveScopes = normalizeExecutionScopes(currentScopes).filter((scope) => savedScopes.includes(scope));
-    if (effectiveScopes.length === 0) effectiveScopes.push('read');
     const queued = existing.status === 'planning'
       ? existing
       : await db.updateTaskIfStatus(taskId, tenantId, ['failed', 'partial'], {
@@ -198,9 +197,16 @@ class DurableAgentRuntime {
         checkpoint: task.checkpoint,
       });
       if (!this.runningTaskIds.has(task.id)) {
+        const reset = task.status === 'running'
+          ? await db.updateTaskIfStatus(task.id, task.tenant_id, ['running'], {
+              status: 'planning',
+              error: 'Interrupted execution recovered with read-only permissions; resume with a fresh credential to regain previously granted write scopes.',
+            })
+          : task;
+        if (!reset) continue;
+        // Recovered tasks do not inherit historical write/admin privileges without a fresh credential.
         queueMicrotask(() => {
-          // Recovered tasks do not inherit historical write/admin privileges without a fresh credential.
-        void this.executeTaskLoop(task.id, task.tenant_id, 'system:recovery', ['read']);
+          void this.executeTaskLoop(task.id, task.tenant_id, 'system:recovery', ['read']);
         });
       }
     }
@@ -228,8 +234,11 @@ class DurableAgentRuntime {
 
     try {
       const task = claimed;
-      const scopes = normalizeExecutionScopes(scopesFromCheckpoint(task.checkpoint));
-      await this.emitEvent(task.id, tenantId, 'task.started', { goal: task.goal });
+      const savedScopes = scopesFromCheckpoint(task.checkpoint);
+      const grantedScopes = normalizeExecutionScopes(scopes);
+      const effectiveScopes = grantedScopes.filter((scope) => savedScopes.includes(scope));
+      const scopesForExecution = effectiveScopes;
+      await this.emitEvent(task.id, tenantId, 'task.started', { goal: task.goal, scopes: scopesForExecution });
       await this.emitEvent(task.id, tenantId, 'task.started', { goal: task.goal });
 
       const steps = await db.listTaskSteps(task.id, tenantId);
@@ -337,7 +346,7 @@ class DurableAgentRuntime {
               tenantId,
               actor,
               taskId: task.id,
-              scopes,
+              scopes: scopesForExecution,
             });
             if (!execRes.ok && step.attempts === 0) {
               usage.retries++;
@@ -346,7 +355,7 @@ class DurableAgentRuntime {
                 tenantId,
                 actor,
                 taskId: task.id,
-                scopes,
+                scopes: scopesForExecution,
               });
             }
             usage.toolCalls++;
@@ -387,7 +396,7 @@ class DurableAgentRuntime {
           });
 
           await db.updateTask(task.id, {
-            checkpoint: { ...task.checkpoint, lastCompletedStepIndex: step.step_index, evidenceSnippets, executionScopes: scopes },
+            checkpoint: { ...task.checkpoint, lastCompletedStepIndex: step.step_index, evidenceSnippets, executionScopes: savedScopes },
             usage,
             loop_signature_counts: loopCounts,
           });
