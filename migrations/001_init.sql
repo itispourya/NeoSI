@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS memories (
   source_url TEXT,
   reliability_score DOUBLE PRECISION NOT NULL DEFAULT 0.8,
   freshness_score DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-  embedding vector(768),
+  embedding vector,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
