@@ -108,9 +108,10 @@ export default function App() {
             placeholder={isClaim ? 'Choose admin passcode (12–256 characters)' : 'Admin passcode'}
             aria-label="Admin passcode"
             required
+            disabled={isClaim && !claimAllowed}
             minLength={isClaim ? 12 : 1}
             maxLength={256}
-            className="w-full px-3 py-2 text-sm bg-[#0B0F17] border border-slate-700 rounded text-slate-100 focus:outline-none focus:border-blue-500"
+            className="w-full px-3 py-2 text-sm bg-[#0B0F17] border border-slate-700 rounded text-slate-100 disabled:opacity-40 focus:outline-none focus:border-blue-500"
           />
           {isClaim && setupTokenRequired && claimAllowed && (
             <input
