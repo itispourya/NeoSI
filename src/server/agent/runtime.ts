@@ -22,8 +22,7 @@ export interface StartTaskInput {
 const VALID_EXECUTION_SCOPES = new Set(['read', 'write', 'forge', 'admin']);
 
 function normalizeExecutionScopes(scopes?: string[]): string[] {
-  const selected = Array.from(new Set((Array.isArray(scopes) ? scopes : ['read']).filter((scope) => VALID_EXECUTION_SCOPES.has(scope))));
-  return selected.length > 0 ? selected : ['read'];
+  return Array.from(new Set((Array.isArray(scopes) ? scopes : ['read']).filter((scope) => VALID_EXECUTION_SCOPES.has(scope))));
 }
 
 function scopesFromCheckpoint(checkpoint: Record<string, unknown>): string[] {
@@ -239,7 +238,6 @@ class DurableAgentRuntime {
       const effectiveScopes = grantedScopes.filter((scope) => savedScopes.includes(scope));
       const scopesForExecution = effectiveScopes;
       await this.emitEvent(task.id, tenantId, 'task.started', { goal: task.goal, scopes: scopesForExecution });
-      await this.emitEvent(task.id, tenantId, 'task.started', { goal: task.goal });
 
       const steps = await db.listTaskSteps(task.id, tenantId);
       const usage = { ...task.usage };
@@ -256,9 +254,8 @@ class DurableAgentRuntime {
         // Cancellation check
         const latestTask = await db.getTaskById(task.id, tenantId);
         if (this.cancelledTaskIds.has(task.id) || latestTask?.status === 'cancelled') {
-          await db.updateTask(task.id, { status: 'cancelled', completed_at: new Date().toISOString() });
           await this.emitEvent(task.id, tenantId, 'task.cancelled', { stepIndex: step.step_index });
-          return db.getTaskById(task.id, tenantId);
+          return latestTask;
         }
 
         // Budget enforcement
@@ -289,7 +286,7 @@ class DurableAgentRuntime {
         const loopCheck = taskPlanner.detectLoop(loopCounts, sig, 3);
         if (loopCheck.looped) {
           const msg = `Loop guard aborted repeated step signature (${sig})`;
-          await db.updateTask(task.id, {
+          await db.updateTaskIfStatus(task.id, tenantId, ['running'], {
             status: 'failed',
             error: msg,
             loop_signature_counts: loopCounts,
@@ -336,7 +333,7 @@ class DurableAgentRuntime {
               toolOutputs,
             });
             stepOutput = verdict as unknown as Record<string, unknown>;
-            await db.updateTask(task.id, { verification: stepOutput });
+            await db.updateTaskIfStatus(task.id, tenantId, ['running'], { verification: stepOutput });
           } else if (step.tool_id) {
             if (usage.toolCalls >= task.budgets.maxToolCalls) {
               throw new Error(`Tool call budget (${task.budgets.maxToolCalls}) exceeded`);
@@ -395,7 +392,7 @@ class DurableAgentRuntime {
             finished_at: new Date().toISOString(),
           });
 
-          await db.updateTask(task.id, {
+          await db.updateTaskIfStatus(task.id, tenantId, ['running'], {
             checkpoint: { ...task.checkpoint, lastCompletedStepIndex: step.step_index, evidenceSnippets, executionScopes: savedScopes },
             usage,
             loop_signature_counts: loopCounts,
@@ -435,6 +432,7 @@ class DurableAgentRuntime {
       const beforeFinalization = await db.getTaskById(task.id, tenantId);
       if (this.cancelledTaskIds.has(task.id) || beforeFinalization?.status === 'cancelled') return beforeFinalization;
 
+      const cumulativeDurationAtFinalization = Number(task.usage.durationMs || 0) + (Date.now() - startMs);
       const finalVerification = criticEngine.verify({
         goal: task.goal,
         draftResponse: answerText || evidenceSnippets.join('\n'),
@@ -447,7 +445,8 @@ class DurableAgentRuntime {
       const unresolvedSteps = finalSteps.filter((s) => s.status === 'pending' || s.status === 'running');
       const hasUsefulOutput = Boolean(answerText.trim() || evidenceSnippets.length > 0);
       const allStepsSettled = failedSteps.length === 0 && unresolvedSteps.length === 0;
-      const finalStatus = allStepsSettled && finalVerification.passed
+      const withinDurationBudget = cumulativeDurationAtFinalization <= task.budgets.maxDurationMs;
+      const finalStatus = allStepsSettled && finalVerification.passed && withinDurationBudget
         ? 'completed'
         : hasUsefulOutput || finalSteps.some((s) => s.status === 'completed')
           ? 'partial'
@@ -456,6 +455,7 @@ class DurableAgentRuntime {
         ...failedSteps.map((s) => `Step ${s.step_index}: ${s.error || 'failed'}`),
         ...unresolvedSteps.map((s) => `Step ${s.step_index}: blocked by an incomplete dependency`),
         ...(!finalVerification.passed ? finalVerification.issues : []),
+        ...(!withinDurationBudget ? [`Execution time budget exceeded at finalization (${cumulativeDurationAtFinalization}ms / ${task.budgets.maxDurationMs}ms).`] : []),
       ].filter(Boolean).join('; ') || null;
       const finalResult = {
         answer: answerText || evidenceSnippets.join('\n'),
