@@ -315,7 +315,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
 
   async searchMemories(queryEmbedding: number[], opts?: MemorySearchOptions): Promise<MemorySearchResult[]> {
     const queryModel = opts?.queryEmbeddingModel;
-    const canVector = queryEmbedding.length > 0 && queryEmbedding.length <= 16_000 && queryEmbedding.every(Number.isFinite);
+    const canVector = queryEmbedding.length > 0 && queryEmbedding.length <= 16_000 && queryEmbedding.every(Number.isFinite) && queryEmbedding.some((value) => value !== 0);
     const queryVectorLiteral = canVector ? toPgVectorLiteral(queryEmbedding) : null;
     const clauses: string[] = ['deleted_at IS NULL'];
     const params: unknown[] = [];
@@ -385,7 +385,12 @@ export class PostgresNeoDatabase implements NeoDatabase {
       }))
     );
     const minScore = opts?.minScore ?? 0.04;
-    return ranked.filter((m) => m.similarity >= minScore || m.hybridScore >= minScore + 0.08).slice(0, opts?.limit ?? 8);
+    const filtered = ranked.filter((m) => m.similarity >= minScore || m.hybridScore >= minScore + 0.08).slice(0, opts?.limit ?? 8);
+    if (filtered.length > 0) {
+      const ids = filtered.map((memory) => memory.id);
+      await this.pool.query('UPDATE memories SET last_accessed_at = NOW() WHERE id = ANY($1::text[])', [ids]);
+    }
+    return filtered;
   }
 
   async countMemories(tenantId?: string): Promise<MemoryCounts> {
