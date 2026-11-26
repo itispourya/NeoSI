@@ -26,6 +26,16 @@ const rateBuckets = new Map<string, number[]>();
 export function checkRateLimit(bucketKey: string, maxRpm: number): { allowed: boolean; limit: number; remaining: number; resetMs: number } {
   const now = Date.now();
   const windowStart = now - 60_000;
+  if (rateBuckets.size > 10_000) {
+    for (const [key, values] of rateBuckets) {
+      if (!values.length || values[values.length - 1] <= windowStart) rateBuckets.delete(key);
+    }
+    while (rateBuckets.size > 10_000) {
+      const oldestKey = rateBuckets.keys().next().value;
+      if (!oldestKey) break;
+      rateBuckets.delete(oldestKey);
+    }
+  }
   const timestamps = (rateBuckets.get(bucketKey) || []).filter((t) => t > windowStart);
   if (timestamps.length >= maxRpm) {
     const oldest = timestamps[0] || now;
@@ -90,15 +100,16 @@ export async function verifyAdminCredential(passcode: string): Promise<boolean> 
 
 export async function claimInitialAdminPasscode(passcode: string): Promise<{ ok: boolean; error?: string }> {
   const state = await getAdminLockState();
-  if (state.locked) {
-    return { ok: false, error: 'Admin access is already configured and locked.' };
-  }
-  if (!passcode || passcode.length < 8) {
-    return { ok: false, error: 'Passcode must be at least 8 characters.' };
+  if (state.locked) return { ok: false, error: 'Admin access is already configured and locked.' };
+  if (!passcode || passcode.length < 12 || passcode.length > 256) {
+    return { ok: false, error: 'Passcode must be between 12 and 256 characters.' };
   }
   const db = await getDb();
-  await db.setAdminConfig('admin_passcode_hash', hashPasscode(passcode));
-  return { ok: true };
+  // Atomic insert prevents two concurrent first-run requests (including across instances) from both claiming admin.
+  const claimed = await db.setAdminConfigIfAbsent('admin_passcode_hash', hashPasscode(passcode));
+  return claimed
+    ? { ok: true }
+    : { ok: false, error: 'Admin access was claimed by another request. Sign in with the configured passcode.' };
 }
 
 function extractBearerOrKey(req: Request): string | null {
@@ -132,7 +143,15 @@ export async function requireAdminConsoleAuth(req: Request, res: Response, next:
   const db = await getDb();
   const tenants = await db.listTenants();
   const requestedTenant = req.header('x-neo-workspace');
-  const activeTenant = (requestedTenant && (await db.getTenantById(requestedTenant))) || tenants[0];
+  const activeTenant = requestedTenant ? await db.getTenantById(requestedTenant) : tenants[0];
+  if (requestedTenant && !activeTenant) return res.status(403).json({ error: 'Requested workspace is not available to this administrator.' });
+  if (!activeTenant) return res.status(503).json({ error: 'No workspace is configured.' });
+
+  const limit = checkRateLimit(`admin:${activeTenant.id}`, activeTenant.rate_limit_rpm);
+  res.setHeader('X-RateLimit-Limit', String(limit.limit));
+  res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
+  res.setHeader('X-RateLimit-Reset', String(Math.ceil(limit.resetMs / 1000)));
+  if (!limit.allowed) return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
 
   req.neoAuth = {
     actorType: 'admin',
@@ -185,7 +204,9 @@ export function requireApiGatewayAuth(requiredScope = 'read') {
     if (rawCredential && verifyAdminToken(rawCredential)) {
       const tenants = await db.listTenants();
       const requestedTenant = req.header('x-neo-workspace');
-      const activeTenant = (requestedTenant && (await db.getTenantById(requestedTenant))) || tenants[0];
+      const activeTenant = requestedTenant ? await db.getTenantById(requestedTenant) : tenants[0];
+      if (requestedTenant && !activeTenant) return res.status(403).json({ error: 'Requested workspace is not available to this administrator.' });
+      if (!activeTenant) return res.status(503).json({ error: 'No workspace is configured.' });
       const limit = checkRateLimit(`admin:${activeTenant.id}`, activeTenant.rate_limit_rpm);
       res.setHeader('X-RateLimit-Limit', String(limit.limit));
       res.setHeader('X-RateLimit-Remaining', String(limit.remaining));

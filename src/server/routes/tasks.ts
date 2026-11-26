@@ -12,7 +12,7 @@ const createTaskSchema = z.object({
   priority: z.enum(['urgent_maintenance', 'user_task', 'scheduled_task', 'internal_improvement']).default('user_task'),
   budgets: z
     .object({
-      maxSteps: z.number().int().min(2).max(30).optional(),
+      maxSteps: z.number().int().min(3).max(30).optional(),
       maxToolCalls: z.number().int().min(1).max(20).optional(),
       maxDurationMs: z.number().int().min(2000).max(180_000).optional(),
     })
@@ -77,7 +77,7 @@ tasksRouter.post('/tasks/:id/cancel', requireApiGatewayAuth('write'), async (req
 });
 
 tasksRouter.post('/tasks/:id/resume', requireApiGatewayAuth('write'), async (req, res) => {
-  const updated = await agentRuntime.resumeTask(String(req.params.id), req.neoAuth!.tenant.id, req.neoAuth!.actorLabel);
+  const updated = await agentRuntime.resumeTask(String(req.params.id), req.neoAuth!.tenant.id, req.neoAuth!.actorLabel, req.neoAuth!.scopes);
   if (!updated) return res.status(404).json({ error: 'Task not found' });
   return res.json({ task: updated });
 });
@@ -102,14 +102,14 @@ tasksRouter.get('/tasks/:id/events', requireApiGatewayAuth('read'), async (req, 
     send('task_event', evt);
   }
 
-  if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+  if (task.status === 'completed' || task.status === 'partial' || task.status === 'failed' || task.status === 'cancelled') {
     send('task_done', { status: task.status, result: task.result, error: task.error });
     return res.end();
   }
 
   const unsubscribe = agentRuntime.subscribeTaskEvents(task.id, (evt) => {
     send('task_event', evt);
-    if (evt.event_type === 'task.completed' || evt.event_type === 'task.failed' || evt.event_type === 'task.cancelled') {
+    if (evt.event_type === 'task.completed' || evt.event_type === 'task.partial' || evt.event_type === 'task.failed' || evt.event_type === 'task.cancelled') {
       send('task_done', { eventType: evt.event_type, payload: evt.payload });
       unsubscribe();
       clearTimeout(safetyTimer);

@@ -59,6 +59,7 @@ memoryRouter.get('/memory/search', requireApiGatewayAuth('read'), async (req, re
 
   const emb = await embeddingEngine.embed(q);
   const matches = await db.searchMemories(emb.vector, {
+    queryEmbeddingModel: emb.model,
     tenantId: req.neoAuth!.tenant.id,
     includeGlobal,
     memoryType: memoryTypeRaw as MemoryType | undefined,
@@ -72,8 +73,8 @@ memoryRouter.get('/memory/search', requireApiGatewayAuth('read'), async (req, re
   });
 });
 
-memoryRouter.post('/memory/consolidate', requireApiGatewayAuth('write'), async (_req, res) => {
-  const summary = await runMemoryConsolidation();
+memoryRouter.post('/memory/consolidate', requireApiGatewayAuth('write'), async (req, res) => {
+  const summary = await runMemoryConsolidation(req.neoAuth!.tenant.id);
   res.json(summary);
 });
 
@@ -164,11 +165,15 @@ const relationshipSchema = z.object({
 memoryRouter.post('/graph/relationships', requireApiGatewayAuth('write'), async (req, res) => {
   const parsed = relationshipSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid relationship payload', issues: parsed.error.issues });
-  const relationship = await knowledgeGraph.addRelationship({
-    tenantId: req.neoAuth!.tenant.id,
-    ...parsed.data,
-  });
-  return res.status(201).json({ relationship });
+  try {
+    const relationship = await knowledgeGraph.addRelationship({
+      tenantId: req.neoAuth!.tenant.id,
+      ...parsed.data,
+    });
+    return res.status(201).json({ relationship });
+  } catch (err) {
+    return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 memoryRouter.get('/graph/traverse/:entityId', requireApiGatewayAuth('read'), async (req, res) => {

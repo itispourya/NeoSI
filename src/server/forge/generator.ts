@@ -179,7 +179,7 @@ export async function invokeDynamicEndpoint(slug: string, payload: unknown, tena
     return { status: 500, body: { error: `Sandbox execution error: ${execRes.error}` } };
   }
 
-  await db.incrementDynamicApiCalls(slug);
+  await db.incrementDynamicApiCalls(slug, api.tenant_id);
   return {
     status: 200,
     body: {

@@ -27,8 +27,10 @@ export function tokenizeMultilingual(text: string): string[] {
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {
-  if (!a.length || !b.length) return 0;
-  const len = Math.min(a.length, b.length);
+  // Different embedding spaces must never be compared by truncating dimensions.
+  if (!a.length || !b.length || a.length !== b.length) return 0;
+  if (a.some((v) => !Number.isFinite(v)) || b.some((v) => !Number.isFinite(v))) return 0;
+  const len = a.length;
   let dot = 0;
   let normA = 0;
   let normB = 0;

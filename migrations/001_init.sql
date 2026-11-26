@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS memories (
   source_url TEXT,
   reliability_score DOUBLE PRECISION NOT NULL DEFAULT 0.8,
   freshness_score DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-  embedding vector(768),
+  embedding vector,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS self_upgrades (
   benchmark_before JSONB NOT NULL DEFAULT '{}'::jsonb,
   benchmark_after JSONB NOT NULL DEFAULT '{}'::jsonb,
   rollback_plan TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('proposed', 'sandbox_passed', 'approved', 'merged', 'rejected', 'rolled_back')),
+  status TEXT NOT NULL CONSTRAINT self_upgrades_status_check CHECK (status IN ('proposed', 'sandbox_passed', 'approved', 'promoted', 'merged', 'rejected', 'rolled_back')),
   auto_eligible BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

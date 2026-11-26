@@ -12,6 +12,7 @@ export type UpgradeStatus =
   | 'proposed'
   | 'sandbox_passed'
   | 'approved'
+  | 'promoted'
   | 'merged'
   | 'rejected'
   | 'rolled_back';

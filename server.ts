@@ -33,7 +33,7 @@ async function startServer() {
   autonomousScheduler.start();
 
   const app = express();
-  app.set('trust proxy', 1);
+  app.set('trust proxy', env.trustProxyHops);
   app.use(securityHeadersAndTracingMiddleware);
   app.use(express.json({ limit: '4mb' }));
 

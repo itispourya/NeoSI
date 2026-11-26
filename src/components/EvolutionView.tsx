@@ -21,7 +21,7 @@ export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
         '/api/v1/evolution/proposals',
         { method: 'POST', body: JSON.stringify({ focusArea }) }
       );
-      setMsg(`Created isolated proposal on branch ${res.proposal.branch_name} (status=${res.proposal.status}).`);
+      setMsg(`Created a standalone candidate proposal (status=${res.proposal.status}); it has not been integrated into the Neo source tree.`);
       await onRefresh();
     } catch (err) {
       setMsg(err instanceof Error ? err.message : 'Proposal failed');
@@ -35,7 +35,9 @@ export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
     setMsg(null);
     try {
       await apiFetch(`/api/v1/evolution/proposals/${id}/${action}`, { method: 'POST', body: '{}' });
-      setMsg(`Proposal ${id.slice(0, 8)} ${action}d.`);
+      setMsg(action === 'approve'
+        ? `Proposal ${id.slice(0, 8)} promoted into the candidate modules directory.`
+        : `Proposal ${id.slice(0, 8)} ${action}d.`);
       await onRefresh();
     } catch (err) {
       setMsg(err instanceof Error ? err.message : `Action ${action} failed`);
@@ -52,7 +54,7 @@ export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
         method: 'POST',
         body: JSON.stringify({ baseModelId: 'qwen2.5:3b-instruct', method: 'lora', minReliability: 0.75 }),
       });
-      setMsg(`Layer D training dataset prepared (${res.job.dataset_size} privacy-filtered JSONL samples, status=${res.job.status}).`);
+      setMsg(`Dataset prepared: ${res.job.dataset_size} privacy-filtered JSONL samples. No model training was started and no adapter weights were produced.`);
       await onRefresh();
     } finally {
       setBusy(false);
@@ -88,9 +90,9 @@ export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
       {/* Layer C Proposal Launcher + Layer D Dataset Builder */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <form onSubmit={diagnoseProposal} className="bg-[#111827] border border-slate-800 rounded p-5 space-y-3">
-          <h2 className="font-display text-sm font-semibold text-slate-100">Layer C — Isolated Git & Benchmark Evolution</h2>
+          <h2 className="font-display text-sm font-semibold text-slate-100">Layer C — Standalone Candidate Module Validation</h2>
           <p className="text-xs text-slate-400">
-            Measures real baseline benchmark, isolates candidate code in temp Git branch + subprocess tests, then re-measures candidate score before gating promotion.
+            Generates a candidate module and tests it in a temporary isolated workspace. It does not test integration with the full Neo codebase or measure candidate impact on the model benchmark. Promotion requires an administrator.
           </p>
           <div className="flex gap-2">
             <input
@@ -112,8 +114,8 @@ export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
         <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h2 className="font-display text-sm font-semibold text-slate-100">Layer D — SFT / LoRA Dataset & Adapter Jobs</h2>
-              <p className="text-xs text-slate-400">Builds deduplicated, PII-redacted JSONL datasets from verified semantic & procedural memory.</p>
+              <h2 className="font-display text-sm font-semibold text-slate-100">Layer D — Training Dataset Preparation Only</h2>
+              <p className="text-xs text-slate-400">Builds deduplicated, PII-redacted JSONL datasets. This workflow does not invoke a trainer or produce model adapter weights.</p>
             </div>
             <button
               type="button"
@@ -170,7 +172,7 @@ export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
                         </button>
                       </>
                     )}
-                    {u.status === 'merged' && (
+                    {(u.status === 'promoted' || u.status === 'merged') && (
                       <button
                         type="button"
                         onClick={() => void actProposal(u.id, 'rollback')}
@@ -186,7 +188,8 @@ export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
                     Before: {u.benchmark_before.accuracyScore}% · {u.benchmark_before.avgLatencyMs}ms
                   </div>
                   <div className="p-2 bg-[#111827] border border-slate-800 rounded">
-                    After: {u.benchmark_after.accuracyScore}% · {u.benchmark_after.avgLatencyMs}ms
+                    Candidate integration benchmark: not run
+                    <div className="mt-1 text-slate-400">Standalone tests: {u.test_results.passed}/{u.test_results.total}</div>
                   </div>
                 </div>
                 <pre className="p-2.5 bg-[#111827] border border-slate-800 rounded font-mono text-[11px] text-slate-300 overflow-x-auto max-h-40">

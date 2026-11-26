@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
+import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 
 /**
@@ -109,8 +111,11 @@ export function isPrivateOrReservedIp(ipRaw: string): boolean {
     if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
     if (a === 192 && b === 0 && c === 0) return true; // 192.0.0.0/24
     if (a === 192 && b === 0 && c === 2) return true; // TEST-NET-1
+    if (a === 192 && b === 88 && c === 99) return true; // Deprecated 6to4 relay anycast
     if (a === 192 && b === 168) return true; // 192.168.0.0/16
     if (a === 198 && (b === 18 || b === 19)) return true; // Benchmarking
+    if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2
+    if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3
     if (a >= 224) return true; // Multicast & reserved
     return false;
   }
@@ -120,6 +125,14 @@ export function isPrivateOrReservedIp(ipRaw: string): boolean {
     if (ip.startsWith('fc') || ip.startsWith('fd')) return true; // ULA fc00::/7
     if (ip.startsWith('fe8') || ip.startsWith('fe9') || ip.startsWith('fea') || ip.startsWith('feb')) return true; // fe80::/10 link-local
     if (ip.startsWith('ff')) return true; // Multicast
+    if (ip.startsWith('::')) return true; // Unspecified, loopback, and deprecated IPv4-compatible forms
+    if (ip.startsWith('2001:')) {
+      const secondHextet = Number.parseInt(ip.split(':')[1] || '0', 16);
+      if (Number.isFinite(secondHextet) && (secondHextet <= 0x01ff || secondHextet === 0x0db8)) return true; // IETF special-purpose and documentation blocks
+    }
+    if (ip.startsWith('2002:')) return true; // 6to4 transition addresses
+    if (ip.startsWith('3fff:')) return true; // IPv6 documentation range
+    if (ip.startsWith('64:ff9b:')) return true; // Well-known NAT64 prefix
     return false;
   }
 
@@ -202,6 +215,87 @@ export interface SafeFetchOptions {
   lookupFn?: (hostname: string) => Promise<Array<{ address: string; family: number }>>;
 }
 
+function pinnedHttpFetch(
+  url: URL,
+  resolvedIps: string[],
+  opts: SafeFetchOptions,
+  timeoutMs: number,
+  maxBytes: number
+): Promise<Response> {
+  const address = resolvedIps[0];
+  const family = address ? net.isIP(address) : 0;
+  if (!address || !family) return Promise.reject(new Error('No validated public IP available for the outbound connection.'));
+
+  return new Promise((resolve, reject) => {
+    const transport = url.protocol === 'https:' ? https : http;
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
+    const headers = { 'Accept-Encoding': 'identity', ...(opts.headers || {}), Host: url.host };
+    let settled = false;
+    let receivedBytes = 0;
+    const chunks: Buffer[] = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const clearRequestTimer = () => { if (timer) clearTimeout(timer); };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearRequestTimer();
+      reject(error);
+    };
+
+    // Pin the socket lookup to the IP already checked by validateExternalUrlAsync.
+    const pinnedLookup = ((_host: string, _options: unknown, callback: (...args: unknown[]) => void) => {
+      callback(null, address, family);
+    }) as never;
+    const request = transport.request({
+      protocol: url.protocol,
+      hostname,
+      port: url.port || undefined,
+      path: `${url.pathname}${url.search}`,
+      method: opts.method || 'GET',
+      headers,
+      lookup: pinnedLookup,
+      ...(url.protocol === 'https:' && !net.isIP(hostname) ? { servername: hostname } : {}),
+    }, (response) => {
+      const declaredLength = Number(response.headers['content-length'] || 0);
+      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+        request.destroy(new Error(`Response exceeded max allowed size (${maxBytes} bytes) from ${url.toString()}`));
+        return;
+      }
+      response.on('data', (chunk: Buffer | string) => {
+        const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        receivedBytes += data.byteLength;
+        if (receivedBytes > maxBytes) {
+          request.destroy(new Error(`Response exceeded max allowed size (${maxBytes} bytes) from ${url.toString()}`));
+          return;
+        }
+        chunks.push(data);
+      });
+      response.on('error', fail);
+      response.on('aborted', () => fail(new Error(`Outbound response aborted by ${url.host}`)));
+      response.on('end', () => {
+        if (settled) return;
+        settled = true;
+        clearRequestTimer();
+        const responseHeaders = new Headers();
+        for (const [key, value] of Object.entries(response.headers)) {
+          if (value !== undefined) responseHeaders.set(key, Array.isArray(value) ? value.join(', ') : value);
+        }
+        const status = response.statusCode || 502;
+        const body = Buffer.concat(chunks);
+        resolve(new Response([204, 205, 304].includes(status) ? null : body, {
+          status,
+          statusText: response.statusMessage,
+          headers: responseHeaders,
+        }));
+      });
+    });
+    request.on('error', fail);
+    timer = setTimeout(() => request.destroy(new Error(`Outbound request timed out after ${timeoutMs}ms`)), timeoutMs);
+    timer.unref?.();
+    if (opts.body) request.write(opts.body);
+    request.end();
+  });
+}
 /**
  * SSRF-hardened external HTTP fetcher:
  * 1. Validates scheme, hostname, and resolved DNS IP addresses before connecting.
@@ -215,8 +309,12 @@ export async function safeExternalFetch(
   const maxRedirects = opts.maxRedirects ?? 4;
   const timeoutMs = opts.timeoutMs ?? 12_000;
   const maxBytes = opts.maxBytes ?? 2_000_000;
-  const fetchFn = opts.fetchImpl ?? fetch;
-
+  if (!Number.isInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 8) {
+    throw new Error('maxRedirects must be an integer between 0 and 8.');
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new Error('Invalid external fetch timeout or response size limit.');
+  }
   let currentUrl = rawUrl;
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const check = await validateExternalUrlAsync(currentUrl, opts.lookupFn);
@@ -224,31 +322,62 @@ export async function safeExternalFetch(
       throw new Error(`SSRF blocked URL '${currentUrl}': ${check.reason}`);
     }
 
-    const res = await fetchFn(check.url.toString(), {
-      method: opts.method ?? 'GET',
-      headers: opts.headers,
-      body: opts.body,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    const res = opts.fetchImpl
+      ? await opts.fetchImpl(check.url.toString(), {
+          method: opts.method ?? 'GET',
+          headers: opts.headers,
+          body: opts.body,
+          redirect: 'manual',
+          signal: AbortSignal.timeout(timeoutMs),
+        })
+      : await pinnedHttpFetch(check.url, check.resolvedIps || [], opts, timeoutMs, maxBytes);
 
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
       if (!location) {
         throw new Error(`Redirect (${res.status}) without Location header from ${currentUrl}`);
       }
-      const nextUrl = new URL(location, check.url).toString();
-      currentUrl = nextUrl;
+      const next = new URL(location, check.url);
+      // Never forward a signed webhook payload or caller-supplied headers to another origin.
+      if (next.origin !== check.url.origin) {
+        throw new Error(`Cross-origin redirect blocked from ${check.url.origin} to ${next.origin}`);
+      }
+      currentUrl = next.toString();
       continue;
     }
 
-    const arrayBuf = await res.arrayBuffer();
-    if (arrayBuf.byteLength > maxBytes) {
+    const declaredLength = Number(res.headers.get('content-length') || 0);
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      await res.body?.cancel();
       throw new Error(`Response exceeded max allowed size (${maxBytes} bytes) from ${currentUrl}`);
     }
-    const bodyBuffer = Buffer.from(arrayBuf);
+
+    const chunks: Buffer[] = [];
+    let receivedBytes = 0;
+    if (res.body) {
+      const reader = res.body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          receivedBytes += value.byteLength;
+          if (receivedBytes > maxBytes) {
+            await reader.cancel();
+            throw new Error(`Response exceeded max allowed size (${maxBytes} bytes) from ${currentUrl}`);
+          }
+          chunks.push(Buffer.from(value));
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    const bodyBuffer = Buffer.concat(chunks);
+    const bufferedResponse = new Response(
+      [204, 205, 304].includes(res.status) ? null : bodyBuffer,
+      { status: res.status, statusText: res.statusText, headers: res.headers }
+    );
     return {
-      response: res,
+      response: bufferedResponse,
       finalUrl: check.url.toString(),
       bodyBuffer,
       bodyText: bodyBuffer.toString('utf8'),

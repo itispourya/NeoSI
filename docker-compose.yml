@@ -3,13 +3,13 @@ services:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: neo
-      POSTGRES_PASSWORD: neo_dev_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the .env file}
       POSTGRES_DB: neo
     volumes:
       - neo_pgdata:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d:ro
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U neo -d neo"]
       interval: 5s
@@ -18,8 +18,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in the .env file}"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - neo_redis:/data
 
@@ -27,7 +28,7 @@ services:
     image: ollama/ollama:latest
     profiles: ["dev", "gpu-single"]
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - neo_ollama:/root/.ollama
 
@@ -36,7 +37,7 @@ services:
     profiles: ["gpu-multi"]
     command: --model Qwen/Qwen2.5-14B-Instruct --tensor-parallel-size 2 --port 8000
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     deploy:
       resources:
         reservations:
@@ -52,12 +53,14 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgresql://neo:neo_dev_password@postgres:5432/neo
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://neo:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the .env file}@postgres:5432/neo
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in the .env file}@redis:6379
       NEO_RUNTIME_DEFAULT: auto
       NEO_OLLAMA_BASE_URL: http://ollama:11434
       NEO_VLLM_BASE_URL: http://vllm-gpu:8000
-      NEO_SANDBOX_MODE: subprocess
+      NEO_SANDBOX_MODE: ${NEO_SANDBOX_MODE:-subprocess}
+      NEO_SESSION_SECRET: ${NEO_SESSION_SECRET:?Set NEO_SESSION_SECRET to at least 32 random bytes in the .env file}
+      NEO_TRUST_PROXY_HOPS: ${NEO_TRUST_PROXY_HOPS:-0}
       NEO_SCHEDULER_ENABLED: "true"
     depends_on:
       postgres:

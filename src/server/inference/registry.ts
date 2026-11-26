@@ -150,13 +150,16 @@ export class NeoModelRegistry implements ModelRegistry {
           await db.updateModel(model.id, { download_status: 'failed' });
           return { ok: false, message: `Ollama pull failed with HTTP ${res.status}` };
         }
+        const verification = await this.verifyModelReady(model.id);
+        if (!verification.ready) {
+          await db.updateModel(model.id, { download_status: 'available', health_status: 'degraded' });
+          return { ok: false, message: `Model pulled, but runtime readiness was not verified: ${verification.message}` };
+        }
         await db.updateModel(model.id, {
-          download_status: 'ready',
           weight_location: `${base}/models/${model.id}`,
-          health_status: 'healthy',
           last_validated_at: new Date().toISOString(),
         });
-        return { ok: true, message: `Pulled '${model.id}' into Ollama successfully.` };
+        return { ok: true, message: `Pulled and runtime-verified '${model.id}' in Ollama.` };
       } catch (err) {
         await db.updateModel(model.id, { download_status: 'failed' });
         return {
@@ -166,8 +169,11 @@ export class NeoModelRegistry implements ModelRegistry {
       }
     }
 
-    // Download verified artifact via SSRF-guarded fetch if sourceUrl explicitly provided
+    // Download a checksum-pinned artifact. Downloading a file is not proof that a runtime can load it.
     if (options?.sourceUrl) {
+      if (!options.expectedSha256 || !/^[a-f0-9]{64}$/i.test(options.expectedSha256)) {
+        return { ok: false, message: 'A valid 64-character SHA-256 checksum is required for model artifact downloads.' };
+      }
       await db.updateModel(model.id, { download_status: 'downloading' });
       try {
         const { response, bodyBuffer } = await safeExternalFetch(options.sourceUrl, {
@@ -189,12 +195,13 @@ export class NeoModelRegistry implements ModelRegistry {
         const targetPath = path.join(modelsRoot, `${safeName}.bin`);
         fs.writeFileSync(targetPath, bodyBuffer);
         await db.updateModel(model.id, {
-          download_status: 'ready',
+          download_status: 'available',
           weight_location: targetPath,
           checksum_sha256: sha256,
+          health_status: 'unknown',
           last_validated_at: new Date().toISOString(),
         });
-        return { ok: true, message: `Downloaded and SHA-256 verified (${sha256.slice(0, 12)}...)` };
+        return { ok: true, message: `Downloaded and checksum-verified (${sha256.slice(0, 12)}...). The artifact is not marked ready until its configured runtime confirms it can load the model.` };
       } catch (err) {
         await db.updateModel(model.id, { download_status: 'failed' });
         return { ok: false, message: err instanceof Error ? err.message : String(err) };
@@ -207,13 +214,56 @@ export class NeoModelRegistry implements ModelRegistry {
     };
   }
 
+  async verifyModelReady(modelId: string): Promise<{ ready: boolean; message: string }> {
+    const db = await getDb();
+    const model = await db.getModelById(modelId);
+    if (!model) return { ready: false, message: `Model '${modelId}' is not registered.` };
+    const runtime = this.runtimes[model.runtime];
+    if (!runtime || !runtime.isConfigured()) {
+      return { ready: false, message: `Runtime '${model.runtime}' is not configured.` };
+    }
+    if (!runtime.probeModelLoaded) {
+      return { ready: false, message: `Runtime '${model.runtime}' cannot verify model availability.` };
+    }
+    const result = await runtime.probeModelLoaded(modelId);
+    if (result.ready) {
+      await db.updateModel(model.id, {
+        download_status: 'ready',
+        health_status: 'healthy',
+        last_validated_at: new Date().toISOString(),
+      });
+    } else {
+      await db.updateModel(model.id, { health_status: 'offline' });
+    }
+    return result;
+  }
+
+  async deleteModel(modelId: string): Promise<boolean> {
+    const db = await getDb();
+    const model = await db.getModelById(modelId);
+    if (!model || model.deployment_status === 'active') return false;
+    const deleted = await db.deleteModel(modelId);
+    if (!deleted) return false;
+
+    // Delete only artifacts stored inside Neo's configured model directory.
+    if (model.weight_location) {
+      const root = path.resolve(process.cwd(), env.modelsDir);
+      const candidate = path.resolve(model.weight_location);
+      const relative = path.relative(root, candidate);
+      const insideRoot = relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+      if (insideRoot && fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        fs.unlinkSync(candidate);
+      }
+    }
+    return true;
+  }
+
   async activateModel(modelId: string, role: ModelRole = 'primary'): Promise<ModelDeployment> {
     const db = await getDb();
     const target = await db.getModelById(modelId);
     if (!target) throw new Error(`Model '${modelId}' does not exist in Model Registry.`);
-    if (target.download_status !== 'ready') {
-      throw new Error(`Model '${modelId}' is not ready (status=${target.download_status}). Install/verify weights first.`);
-    }
+    const readiness = await this.verifyModelReady(modelId);
+    if (!readiness.ready) throw new Error(`Model '${modelId}' failed runtime verification: ${readiness.message}`);
 
     // Demote current active model for this role so rollback remains available
     const allModels = await db.listModels();
@@ -252,6 +302,8 @@ export class NeoModelRegistry implements ModelRegistry {
     const fallbackId = prevId || 'neo-embedded-core-v1';
     const target = await db.getModelById(fallbackId);
     if (!target) return null;
+    const readiness = await this.verifyModelReady(target.id);
+    if (!readiness.ready) return null;
 
     const allModels = await db.listModels();
     for (const m of allModels) {
@@ -293,11 +345,21 @@ export class NeoInferenceEngine implements InferenceEngine {
       chain.push({ runtime, modelId });
     };
 
+    const db = await getDb();
+    if (req.strictTarget) {
+      if (!req.preferredRuntime || !req.preferredModelId) throw new Error('Strict inference requires both preferredRuntime and preferredModelId.');
+      const target = await db.getModelById(req.preferredModelId);
+      if (!target) throw new Error('Strict inference target is not registered.');
+      if (target.runtime !== req.preferredRuntime) throw new Error('Strict inference runtime does not match the registered model runtime.');
+      if (!this.runtimes[req.preferredRuntime]?.isConfigured()) throw new Error('Strict inference runtime is not configured.');
+      pushUnique(req.preferredRuntime, req.preferredModelId);
+      return chain;
+    }
+
     if (req.preferredRuntime && this.runtimes[req.preferredRuntime]?.isConfigured()) {
       pushUnique(req.preferredRuntime, req.preferredModelId || env.primaryModel);
     }
 
-    const db = await getDb();
     const models = await db.listModels();
     const role = req.role || 'primary';
     const activeForRole = models.filter(
@@ -315,6 +377,13 @@ export class NeoInferenceEngine implements InferenceEngine {
       pushUnique(env.runtimeDefault, env.primaryModel);
     }
 
+    if (req.strictTarget) {
+      if (chain.length === 0) {
+        throw new Error('Strict inference target requires a registered model and a configured runtime.');
+      }
+      return chain.slice(0, 1);
+    }
+
     pushUnique('embedded', 'neo-embedded-core-v1');
     return chain;
   }
@@ -329,6 +398,9 @@ export class NeoInferenceEngine implements InferenceEngine {
       const start = Date.now();
       try {
         const res = await rt.generate(req, candidate.modelId);
+        if (res.modelId !== candidate.modelId) {
+          throw new Error(`Runtime returned model '${res.modelId}' instead of requested target '${candidate.modelId}'.`);
+        }
         await db.recordTelemetry({
           tenant_id: req.tenantId || 'global',
           provider: `neo-runtime:${res.runtime}`,

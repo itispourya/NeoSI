@@ -2,11 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { getDb } from '../db/adapter.ts';
 import { forgeDynamicEndpoint, invokeDynamicEndpoint } from '../forge/generator.ts';
-import { checkRateLimit, requireApiGatewayAuth } from '../security/auth.ts';
+import { checkRateLimit, requireAdminConsoleAuth, requireApiGatewayAuth } from '../security/auth.ts';
 
 export const forgeRouter = Router();
 
-forgeRouter.get('/forge/endpoints', requireApiGatewayAuth('read'), async (req, res) => {
+forgeRouter.get('/forge/endpoints', requireAdminConsoleAuth, async (req, res) => {
   const db = await getDb();
   const endpoints = await db.listDynamicApis(req.neoAuth!.tenant.id);
   res.json({ endpoints });
@@ -47,7 +47,7 @@ forgeRouter.patch('/forge/:slug/toggle', requireApiGatewayAuth('forge'), async (
   return res.json({ endpoint: updated });
 });
 
-forgeRouter.get('/openapi.json', async (_req, res) => {
+forgeRouter.get('/openapi.json', requireAdminConsoleAuth, async (_req, res) => {
   const db = await getDb();
   const dynamicApis = await db.listDynamicApis();
 
@@ -142,6 +142,9 @@ forgeRouter.get('/openapi.json', async (_req, res) => {
 });
 
 forgeRouter.all('/custom/:slug', requireApiGatewayAuth('read'), async (req, res) => {
+  if (!['GET', 'HEAD'].includes(req.method) && !req.neoAuth!.scopes.includes('write') && !req.neoAuth!.scopes.includes('admin')) {
+    return res.status(403).json({ error: 'Write scope is required for mutating custom API requests.' });
+  }
   const slug = String(req.params.slug);
   const tenantId = req.neoAuth!.tenant.id;
   const db = await getDb();

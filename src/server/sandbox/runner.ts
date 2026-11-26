@@ -61,6 +61,27 @@ function runInIsolatedSubprocess(
   runnerSource: string,
   timeoutMs: number
 ): { ok: boolean; stdout: string; stderr: string; isolation: 'subprocess' | 'docker'; timedOut: boolean } {
+  const dockerConfigured = env.sandboxMode === 'docker';
+  const dockerAvailable = isDockerAvailable();
+  if (env.nodeEnv === 'production' && !dockerConfigured) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: 'Dynamic code execution is disabled in production unless the Docker sandbox is explicitly configured.',
+      isolation: 'subprocess',
+      timedOut: false,
+    };
+  }
+  if (dockerConfigured && !dockerAvailable) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: 'Docker sandbox was required but the Docker daemon is unavailable. Refusing to fall back to subprocess execution.',
+      isolation: 'docker',
+      timedOut: false,
+    };
+  }
+
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'neo-sandbox-'));
   const entryPath = path.join(tempDir, 'run.cjs');
 

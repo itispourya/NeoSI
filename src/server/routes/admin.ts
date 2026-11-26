@@ -12,6 +12,7 @@ import {
   claimInitialAdminPasscode,
   getAdminLockState,
   issueAdminToken,
+  checkRateLimit,
   requireAdminConsoleAuth,
   verifyAdminCredential,
 } from '../security/auth.ts';
@@ -26,6 +27,11 @@ adminRouter.get('/auth/status', async (_req, res) => {
 });
 
 adminRouter.post('/auth/claim', async (req, res) => {
+  const rate = checkRateLimit(`admin-claim:${req.ip || req.socket.remoteAddress || 'unknown'}`, 5);
+  if (!rate.allowed) {
+    res.setHeader('Retry-After', String(Math.ceil(rate.resetMs / 1000)));
+    return res.status(429).json({ error: 'Too many admin setup attempts. Try again later.' });
+  }
   const passcode = String(req.body?.passcode || '');
   const result = await claimInitialAdminPasscode(passcode);
   if (!result.ok) {
@@ -36,6 +42,11 @@ adminRouter.post('/auth/claim', async (req, res) => {
 });
 
 adminRouter.post('/auth/login', async (req, res) => {
+  const rate = checkRateLimit(`admin-login:${req.ip || req.socket.remoteAddress || 'unknown'}`, 10);
+  if (!rate.allowed) {
+    res.setHeader('Retry-After', String(Math.ceil(rate.resetMs / 1000)));
+    return res.status(429).json({ error: 'Too many admin login attempts. Try again later.' });
+  }
   const passcode = String(req.body?.passcode || '');
   const valid = await verifyAdminCredential(passcode);
   if (!valid) {

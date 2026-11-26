@@ -11,7 +11,7 @@ import { runAutonomousResearch } from '../knowledge/research.ts';
 import { extractTextFromPdfBuffer } from '../multimodal/pdf.ts';
 import { distillTextLocally } from '../neo/sovereignEngine.ts';
 import { fetchCleanUrlContent } from '../search/webSearch.ts';
-import { requireApiGatewayAuth } from '../security/auth.ts';
+import { requireAdminConsoleAuth, requireApiGatewayAuth } from '../security/auth.ts';
 
 export const knowledgeRouter = Router();
 
@@ -29,7 +29,7 @@ knowledgeRouter.post('/research', requireApiGatewayAuth('write'), async (req, re
       query: parsed.data.query,
       urls: parsed.data.urls,
     });
-    return res.status(201).json({ report });
+    return res.status(report.status === 'completed' ? 201 : 503).json({ report });
   } catch (err) {
     return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -121,6 +121,7 @@ knowledgeRouter.post('/knowledge/query', requireApiGatewayAuth('read'), async (r
   const db = await getDb();
   const embedding = await embeddingEngine.embed(parsed.data.query);
   const matches = await db.searchMemories(embedding.vector, {
+    queryEmbeddingModel: embedding.model,
     memoryType: parsed.data.memoryType as MemoryType | undefined,
     tenantId: req.neoAuth!.tenant.id,
     includeGlobal: true,
@@ -137,6 +138,7 @@ knowledgeRouter.get('/knowledge/search', requireApiGatewayAuth('read'), async (r
   const db = await getDb();
   const emb = await embeddingEngine.embed(q);
   const matches = await db.searchMemories(emb.vector, {
+    queryEmbeddingModel: emb.model,
     tenantId: req.neoAuth!.tenant.id,
     includeGlobal: true,
     queryText: q,
@@ -150,7 +152,7 @@ knowledgeRouter.post('/knowledge/learn', requireApiGatewayAuth('write'), async (
   const topic = String(req.body?.topic || '').trim();
   if (topic.length < 3) return res.status(400).json({ error: 'Topic must be at least 3 characters' });
   try {
-    const result = await knowledgeDaemon.triggerManualLearn(topic, typeof req.body?.streamId === 'string' ? req.body.streamId : undefined);
+    const result = await knowledgeDaemon.triggerManualLearn(topic, typeof req.body?.streamId === 'string' ? req.body.streamId : undefined, req.neoAuth!.tenant.id);
     return res.json(result);
   } catch (err) {
     return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -179,7 +181,7 @@ const skillCreateSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
-knowledgeRouter.post('/skills', requireApiGatewayAuth('write'), async (req, res) => {
+knowledgeRouter.post('/skills', requireAdminConsoleAuth, async (req, res) => {
   const parsed = skillCreateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid skill payload', issues: parsed.error.issues });
   const db = await getDb();
@@ -202,7 +204,7 @@ knowledgeRouter.get('/skills/:id', requireApiGatewayAuth('read'), async (req, re
   return res.json({ skill });
 });
 
-knowledgeRouter.patch('/skills/:id', requireApiGatewayAuth('write'), async (req, res) => {
+knowledgeRouter.patch('/skills/:id', requireAdminConsoleAuth, async (req, res) => {
   const db = await getDb();
   const updated = await db.updateSkillById(String(req.params.id), {
     title: typeof req.body?.title === 'string' ? req.body.title : undefined,
@@ -214,7 +216,7 @@ knowledgeRouter.patch('/skills/:id', requireApiGatewayAuth('write'), async (req,
   return res.json({ skill: updated });
 });
 
-knowledgeRouter.post('/skills/:id/evaluate', requireApiGatewayAuth('write'), async (req, res) => {
+knowledgeRouter.post('/skills/:id/evaluate', requireAdminConsoleAuth, async (req, res) => {
   const result = await evaluateSkill(String(req.params.id));
   if (!result.skill) return res.status(404).json({ error: 'Skill not found' });
   return res.json(result);

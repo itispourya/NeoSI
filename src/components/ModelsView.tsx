@@ -50,6 +50,20 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
     }
   };
 
+  const verifyModel = async (modelId: string) => {
+    setBusyModel(modelId);
+    setError(null);
+    try {
+      const result = await apiFetch<{ ready: boolean; message: string }>(`/api/v1/models/${encodeURIComponent(modelId)}/verify`, { method: 'POST', body: '{}' });
+      setStatusMsg(result.message);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Runtime verification failed');
+    } finally {
+      setBusyModel(null);
+    }
+  };
+
   const activateModel = async (modelId: string) => {
     setBusyModel(modelId);
     setError(null);
@@ -107,7 +121,7 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
               disabled={busyModel !== null}
               className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-xs font-medium text-white whitespace-nowrap shrink-0 disabled:opacity-50"
             >
-              {busyModel === 'neo-embedded-core-v1' ? 'Benchmarking...' : 'Run 12-Category Benchmark'}
+              {busyModel === 'neo-embedded-core-v1' ? 'Benchmarking...' : 'Run Benchmark'}
             </button>
             <button
               type="button"
@@ -157,7 +171,17 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
                     </td>
                     <td className="py-3">
                       <div className="flex flex-wrap gap-1.5">
-                        {m.download_status !== 'ready' && (
+                        {m.download_status === 'available' && (
+                          <button
+                            type="button"
+                            onClick={() => void verifyModel(m.id)}
+                            disabled={busyModel !== null}
+                            className="px-2.5 py-1 rounded border border-amber-500/40 text-amber-300 hover:bg-amber-500/10 text-[11px] whitespace-nowrap"
+                          >
+                            Verify Runtime
+                          </button>
+                        )}
+                        {m.download_status !== 'ready' && m.download_status !== 'available' && (
                           <button
                             type="button"
                             onClick={() => void installModel(m.id)}
@@ -202,7 +226,7 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
             Latest Intelligence Benchmark {latestEval ? `(${latestEval.model_id} · ${latestEval.overall_score}%)` : ''}
           </h3>
           {!latestEval ? (
-            <div className="text-xs text-slate-400 py-4">Click "Run 12-Category Benchmark" to measure real reasoning, coding, math, Persian, and business analysis scores.</div>
+            <div className="text-xs text-slate-400 py-4">Run the focused regression suite to inspect model behavior. Results are task-specific and are not a standardized intelligence score.</div>
           ) : (
             <div className="space-y-2.5">
               {Object.entries(latestEval.category_scores).map(([cat, score]) => (

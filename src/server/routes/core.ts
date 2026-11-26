@@ -54,7 +54,7 @@ coreRouter.get('/conversations/:id/messages', requireApiGatewayAuth('read'), asy
   return res.json({ conversation: conv, messages });
 });
 
-coreRouter.post('/chat', requireApiGatewayAuth('read'), async (req, res) => {
+coreRouter.post('/chat', requireApiGatewayAuth('write'), async (req, res) => {
   const parsed = chatSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid chat request', issues: parsed.error.issues });
@@ -109,7 +109,7 @@ coreRouter.post('/chat', requireApiGatewayAuth('read'), async (req, res) => {
   });
 });
 
-coreRouter.post('/chat/stream', requireApiGatewayAuth('read'), async (req, res) => {
+coreRouter.post('/chat/stream', requireApiGatewayAuth('write'), async (req, res) => {
   const parsed = chatSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid request body', issues: parsed.error.issues });
@@ -350,11 +350,12 @@ coreRouter.post('/business/analyze', requireApiGatewayAuth('write'), async (req,
     const db = await getDb();
 
     let webhookDelivered = false;
-    if (parsed.data.deliverWebhook && tenant.webhook_url) {
+    if (parsed.data.deliverWebhook && tenant.webhook_url && (tenant.webhook_secret || env.webhookSecret)) {
       const check = await validateExternalUrlAsync(tenant.webhook_url);
       if (check.valid) {
         const bodyStr = JSON.stringify({ event: 'business.analysis.completed', tenantId: tenant.id, analysis });
-        const secret = tenant.webhook_secret || env.webhookSecret || 'neos-default-signing-secret';
+        const secret = tenant.webhook_secret || env.webhookSecret;
+        if (!secret) throw new Error('Webhook signing secret is not configured.');
         const sig = signWebhookPayload(bodyStr, secret);
         try {
           const { response } = await safeExternalFetch(tenant.webhook_url, {
@@ -422,7 +423,7 @@ coreRouter.post('/engineer/task', requireApiGatewayAuth('write'), async (req, re
   }
 });
 
-coreRouter.post('/modules/:id/execute', requireApiGatewayAuth('read'), async (req, res) => {
+coreRouter.post('/modules/:id/execute', requireApiGatewayAuth('forge'), async (req, res) => {
   const result = executePromotedModule(String(req.params.id), req.body ?? {});
   if (!result.ok) {
     return res.status(400).json({ error: result.error });

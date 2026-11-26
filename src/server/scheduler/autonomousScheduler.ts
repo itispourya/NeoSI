@@ -33,7 +33,12 @@ class AutonomousScheduler {
         return knowledgeDaemon.runScheduledCycle();
       }
       case 'memory_consolidation': {
-        return (await runMemoryConsolidation()) as unknown as Record<string, unknown>;
+        const db = await getDb();
+        const tenants = await db.listTenants();
+        const summaries = [];
+        for (const tenant of tenants) summaries.push(await runMemoryConsolidation(tenant.id));
+        summaries.push(await runMemoryConsolidation('global'));
+        return { workspacesProcessed: tenants.length, summaries };
       }
       case 'skill_evaluation': {
         const db = await getDb();

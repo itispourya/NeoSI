@@ -45,7 +45,7 @@ import type {
   UpgradeStatus,
 } from './schema.ts';
 import { seedInitialData } from './seed.ts';
-import { computeBm25Scores, computeTemporalDecay, cosineSimilarity, hybridRerank } from './vector.ts';
+import { computeBm25Scores, computeTemporalDecay, cosineSimilarity, hybridRerank, tokenizeMultilingual } from './vector.ts';
 
 function parseJson<T>(raw: unknown, fallback: T): T {
   if (raw === null || raw === undefined) return fallback;
@@ -666,6 +666,9 @@ export class SqliteNeoDatabase implements NeoDatabase {
     const now = new Date().toISOString();
     const embDim = input.embedding_dim ?? input.embedding.length;
     const embModel = input.embedding_model || 'neo-embed-local-v2';
+    if (embDim !== input.embedding.length) {
+      throw new Error('Embedding metadata dimension does not match the supplied vector length.');
+    }
     const rec: MemoryRecord = {
       id: uuidv4(),
       tenant_id: input.tenant_id,
@@ -740,6 +743,15 @@ export class SqliteNeoDatabase implements NeoDatabase {
   ): Promise<MemoryRecord | null> {
     const existing = await this.getMemoryById(id, tenantId, false);
     if (!existing) return null;
+    if (patch.embedding && patch.embedding_dim !== undefined && patch.embedding_dim !== patch.embedding.length) {
+      throw new Error('Embedding metadata dimension does not match the supplied vector length.');
+    }
+    if (!patch.embedding && (
+      (patch.embedding_model !== undefined && patch.embedding_model !== existing.embedding_model) ||
+      (patch.embedding_dim !== undefined && patch.embedding_dim !== existing.embedding_dim)
+    )) {
+      throw new Error('Embedding model or dimension cannot change without supplying the matching replacement vector.');
+    }
     const merged: MemoryRecord = {
       ...existing,
       ...patch,
@@ -816,19 +828,59 @@ export class SqliteNeoDatabase implements NeoDatabase {
   }
 
   async searchMemories(queryEmbedding: number[], opts?: MemorySearchOptions): Promise<MemorySearchResult[]> {
-    const candidates = await this.listMemories({
+    const recentCandidates = await this.listMemories({
       memoryType: opts?.memoryType,
       tenantId: opts?.tenantId,
       includeGlobal: opts?.includeGlobal ?? false,
       validAt: opts?.validAt,
       limit: 500,
     });
+    const candidateMap = new Map(recentCandidates.map((memory) => [memory.id, memory]));
+    const queryTerms = opts?.queryText
+      ? Array.from(new Set(tokenizeMultilingual(opts.queryText).filter((term) => term.length >= 2))).slice(0, 8)
+      : [];
+
+    if (queryTerms.length > 0) {
+      const clauses = ['deleted_at IS NULL'];
+      const params: (string | number)[] = [];
+      if (opts?.memoryType) {
+        clauses.push('memory_type = ?');
+        params.push(opts.memoryType);
+      }
+      if (opts?.tenantId) {
+        if (opts.includeGlobal) {
+          clauses.push('(tenant_id = ? OR tenant_id = ?)');
+          params.push(opts.tenantId, 'global');
+        } else {
+          clauses.push('tenant_id = ?');
+          params.push(opts.tenantId);
+        }
+      }
+      if (opts?.validAt) {
+        clauses.push('(valid_from IS NULL OR valid_from <= ?) AND (valid_to IS NULL OR valid_to >= ?)');
+        params.push(opts.validAt, opts.validAt);
+      }
+      const tokenClauses = queryTerms.map(() => '(lower(topic) LIKE ? OR lower(title) LIKE ? OR lower(content) LIKE ?)');
+      for (const term of queryTerms) {
+        const pattern = `%${term.toLowerCase()}%`;
+        params.push(pattern, pattern, pattern);
+      }
+      const lexicalRows = this.db.prepare(
+        `SELECT * FROM memories WHERE ${clauses.join(' AND ')} AND (${tokenClauses.join(' OR ')}) ORDER BY created_at DESC LIMIT ?`
+      ).all(...params, 200) as Record<string, unknown>[];
+      for (const row of lexicalRows) {
+        const memory = this.mapMemoryRow(row);
+        if (!candidateMap.has(memory.id)) candidateMap.set(memory.id, memory);
+      }
+    }
+
+    const candidates = Array.from(candidateMap.values());
     if (candidates.length === 0) return [];
     const minScore = opts?.minScore ?? 0.04;
     const bm25 = opts?.queryText
       ? computeBm25Scores(
           opts.queryText,
-          candidates.map((c) => `${c.topic} ${c.title} ${c.content}`)
+          candidates.map((candidate) => `${candidate.topic} ${candidate.title} ${candidate.content}`)
         )
       : candidates.map(() => 0);
 
@@ -1118,6 +1170,17 @@ export class SqliteNeoDatabase implements NeoDatabase {
     return rec;
   }
 
+  async getEntityById(id: string, tenantId: string): Promise<GraphEntityRecord | null> {
+    const r = this.db.prepare('SELECT * FROM entities WHERE id = ? AND tenant_id = ?').get(id, tenantId) as Record<string, unknown> | undefined;
+    if (!r) return null;
+    return {
+      ...(r as unknown as GraphEntityRecord),
+      aliases: parseJson<string[]>(r.aliases, []),
+      attributes: parseJson<Record<string, unknown>>(r.attributes, {}),
+      embedding: parseJson<number[]>(r.embedding, []),
+    };
+  }
+
   async listEntities(tenantId: string, opts?: { entityType?: string; query?: string; limit?: number }): Promise<GraphEntityRecord[]> {
     const clauses = ['tenant_id = ?'];
     const params: (string | number)[] = [tenantId];
@@ -1273,6 +1336,45 @@ export class SqliteNeoDatabase implements NeoDatabase {
         id
       );
     return merged;
+  }
+
+  async updateTaskIfStatus(
+    id: string,
+    tenantId: string,
+    expectedStatuses: TaskStatus[],
+    patch: Parameters<NeoDatabase['updateTask']>[1]
+  ): Promise<TaskRecord | null> {
+    if (expectedStatuses.length === 0) return null;
+    type SqlValue = null | string | number | bigint | Uint8Array;
+    const columns: Record<string, { column: string; serialize: (value: unknown) => SqlValue }> = {
+      status: { column: 'status', serialize: (v) => String(v) },
+      plan: { column: 'plan', serialize: (v) => JSON.stringify(v) ?? null },
+      checkpoint: { column: 'checkpoint', serialize: (v) => JSON.stringify(v) ?? null },
+      result: { column: 'result', serialize: (v) => v === null ? null : JSON.stringify(v) ?? null },
+      verification: { column: 'verification', serialize: (v) => v === null ? null : JSON.stringify(v) ?? null },
+      error: { column: 'error', serialize: (v) => v === null ? null : String(v) },
+      usage: { column: 'usage', serialize: (v) => JSON.stringify(v) ?? null },
+      loop_signature_counts: { column: 'loop_signature_counts', serialize: (v) => JSON.stringify(v) ?? null },
+      completed_at: { column: 'completed_at', serialize: (v) => v === null ? null : String(v) },
+    };
+    const assignments: string[] = [];
+    const values: SqlValue[] = [];
+    for (const [key, value] of Object.entries(patch)) {
+      const definition = columns[key];
+      if (!definition || value === undefined) continue;
+      assignments.push(`${definition.column} = ?`);
+      values.push(definition.serialize(value));
+    }
+    if (assignments.length === 0) return this.getTaskById(id, tenantId);
+    assignments.push('updated_at = ?');
+    values.push(new Date().toISOString());
+    const placeholders = expectedStatuses.map(() => '?').join(', ');
+    const result = this.db.prepare(
+      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? AND tenant_id = ? AND status IN (${placeholders})`
+    ).run(...values, id, tenantId, ...expectedStatuses);
+    if (Number(result.changes) === 0) return null;
+    const raw = this.db.prepare('SELECT * FROM tasks WHERE id = ? AND tenant_id = ?').get(id, tenantId) as Record<string, unknown> | undefined;
+    return raw ? this.mapTaskRow(raw) : null;
   }
 
   async upsertTaskStep(input: Omit<TaskStepRecord, 'id'> & { id?: string }): Promise<TaskStepRecord> {
@@ -1840,11 +1942,14 @@ export class SqliteNeoDatabase implements NeoDatabase {
 
   async upsertDynamicApi(input: Omit<DynamicApiRecord, 'id' | 'call_count' | 'created_at' | 'updated_at'>): Promise<DynamicApiRecord> {
     const existing = await this.getDynamicApiBySlug(input.slug);
+    if (existing && existing.tenant_id !== input.tenant_id) {
+      throw new Error('This endpoint slug is already reserved by another workspace.');
+    }
     const now = new Date().toISOString();
     if (existing) {
       this.db
         .prepare(
-          `UPDATE dynamic_apis SET name = ?, description = ?, method = ?, input_schema = ?, output_schema = ?, handler_code = ?, test_code = ?, test_report = ?, openapi_spec = ?, rate_limit_rpm = ?, enabled = ?, updated_at = ? WHERE slug = ?`
+          `UPDATE dynamic_apis SET name = ?, description = ?, method = ?, input_schema = ?, output_schema = ?, handler_code = ?, test_code = ?, test_report = ?, openapi_spec = ?, rate_limit_rpm = ?, enabled = ?, updated_at = ? WHERE slug = ? AND tenant_id = ?`
         )
         .run(
           input.name,
@@ -1859,9 +1964,10 @@ export class SqliteNeoDatabase implements NeoDatabase {
           input.rate_limit_rpm,
           input.enabled ? 1 : 0,
           now,
-          input.slug
+          input.slug,
+          input.tenant_id
         );
-      return (await this.getDynamicApiBySlug(input.slug))!;
+      return (await this.getDynamicApiBySlug(input.slug, input.tenant_id))!;
     }
     const rec: DynamicApiRecord = { ...input, id: uuidv4(), call_count: 0, created_at: now, updated_at: now };
     this.db
@@ -1890,8 +1996,8 @@ export class SqliteNeoDatabase implements NeoDatabase {
     return rec;
   }
 
-  async incrementDynamicApiCalls(slug: string): Promise<void> {
-    this.db.prepare('UPDATE dynamic_apis SET call_count = call_count + 1 WHERE slug = ?').run(slug);
+  async incrementDynamicApiCalls(slug: string, tenantId: string): Promise<void> {
+    this.db.prepare('UPDATE dynamic_apis SET call_count = call_count + 1 WHERE slug = ? AND tenant_id = ?').run(slug, tenantId);
   }
 
   async toggleDynamicApi(slug: string, enabled: boolean, tenantId?: string): Promise<DynamicApiRecord | null> {
@@ -2025,13 +2131,15 @@ export class SqliteNeoDatabase implements NeoDatabase {
       );
   }
 
-  async listTelemetry(limit = 50): Promise<LlmTelemetryRecord[]> {
-    const rows = this.db.prepare('SELECT * FROM llm_telemetry ORDER BY created_at DESC LIMIT ?').all(limit) as Record<string, unknown>[];
+  async listTelemetry(limit = 50, tenantId?: string): Promise<LlmTelemetryRecord[]> {
+    const rows = tenantId
+      ? (this.db.prepare('SELECT * FROM llm_telemetry WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?').all(tenantId, limit) as Record<string, unknown>[])
+      : (this.db.prepare('SELECT * FROM llm_telemetry ORDER BY created_at DESC LIMIT ?').all(limit) as Record<string, unknown>[]);
     return rows.map((r) => ({ ...(r as unknown as LlmTelemetryRecord), success: Boolean(r.success) }));
   }
 
-  async getTelemetrySummary() {
-    const rows = await this.listTelemetry(500);
+  async getTelemetrySummary(tenantId?: string) {
+    const rows = await this.listTelemetry(500, tenantId);
     const totalCalls = rows.length;
     const successes = rows.filter((r) => r.success).length;
     const totalTokens = rows.reduce((s, r) => s + r.prompt_tokens + r.completion_tokens, 0);
@@ -2088,5 +2196,12 @@ export class SqliteNeoDatabase implements NeoDatabase {
     this.db
       .prepare(`INSERT INTO admin_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
       .run(key, value, new Date().toISOString());
+  }
+
+  async setAdminConfigIfAbsent(key: string, value: string): Promise<boolean> {
+    const result = this.db
+      .prepare('INSERT INTO admin_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
+      .run(key, value, new Date().toISOString());
+    return Number(result.changes) === 1;
   }
 }

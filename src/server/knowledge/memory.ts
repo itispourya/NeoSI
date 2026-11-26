@@ -98,11 +98,8 @@ export function formatRagContextForPrompt(bundle: RagContextBundle): string {
   return sections.join('\n\n');
 }
 
-function defaultEpistemicStatus(memoryType: MemoryType, sourceUrl?: string | null): EpistemicStatus {
-  if (memoryType === 'working') return 'observation';
-  if (memoryType === 'episodic') return 'observation';
-  if (memoryType === 'temporal') return sourceUrl ? 'verified_fact' : 'observation';
-  if (memoryType === 'semantic' || memoryType === 'procedural') return sourceUrl ? 'verified_fact' : 'observation';
+function defaultEpistemicStatus(_memoryType: MemoryType, _sourceUrl?: string | null): EpistemicStatus {
+  // A source URL establishes provenance, not truth. Verification is an explicit evidence-evaluation step.
   return 'observation';
 }
 

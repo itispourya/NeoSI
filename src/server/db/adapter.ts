@@ -14,7 +14,7 @@ export async function getDb(): Promise<NeoDatabase> {
     initPromise = (async () => {
       const instance: NeoDatabase = env.databaseUrl
         ? new PostgresNeoDatabase(env.databaseUrl)
-        : new SqliteNeoDatabase();
+        : new SqliteNeoDatabase(env.sqliteDbPath);
       await instance.init();
       dbInstance = instance;
       return instance;

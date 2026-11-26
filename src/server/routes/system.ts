@@ -53,7 +53,7 @@ systemRouter.get('/metrics', requireApiGatewayAuth('read'), async (req, res) => 
   const db = await getDb();
   const [memoryCounts, telemetry, tasks, toolExecutions, scheduledJobs, hardware] = await Promise.all([
     db.countMemories(tenantId),
-    db.getTelemetrySummary(),
+    db.getTelemetrySummary(tenantId),
     db.listTasks(tenantId, { limit: 100 }),
     db.listToolExecutions(tenantId, 100),
     db.listScheduledJobs(),

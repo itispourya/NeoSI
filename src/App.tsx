@@ -90,7 +90,7 @@ export default function App() {
                 {isClaim ? 'Initialize Neo Admin Passcode' : 'Neo Control Plane'}
               </h1>
               <p className="text-[11px] font-mono text-slate-400">
-                {isClaim ? 'First-time console setup (min 8 chars)' : 'Enter admin passcode to authenticate'}
+                {isClaim ? 'First-time console setup (12–256 characters)' : 'Enter admin passcode to authenticate'}
               </p>
             </div>
           </div>
@@ -99,10 +99,11 @@ export default function App() {
             type="password"
             value={passcode}
             onChange={(e) => setPasscode(e.target.value)}
-            placeholder={isClaim ? 'Choose admin passcode (min 8 chars)' : 'Admin passcode'}
+            placeholder={isClaim ? 'Choose admin passcode (12–256 characters)' : 'Admin passcode'}
             aria-label="Admin passcode"
             required
-            minLength={isClaim ? 8 : 1}
+            minLength={isClaim ? 12 : 1}
+            maxLength={256}
             className="w-full px-3 py-2 text-sm bg-[#0B0F17] border border-slate-700 rounded text-slate-100 focus:outline-none focus:border-blue-500"
           />
           {error && <p className="text-xs text-rose-400">{error}</p>}

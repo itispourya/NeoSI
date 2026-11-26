@@ -182,6 +182,7 @@ export interface NeoDatabase {
 
   // Knowledge Graph
   upsertEntity(input: Omit<GraphEntityRecord, 'id' | 'created_at' | 'updated_at'>): Promise<GraphEntityRecord>;
+  getEntityById(id: string, tenantId: string): Promise<GraphEntityRecord | null>;
   listEntities(tenantId: string, opts?: { entityType?: string; query?: string; limit?: number }): Promise<GraphEntityRecord[]>;
   addRelationship(input: Omit<GraphRelationshipRecord, 'id' | 'created_at'>): Promise<GraphRelationshipRecord>;
   listRelationships(tenantId: string, entityId?: string, limit?: number): Promise<GraphRelationshipRecord[]>;
@@ -194,6 +195,14 @@ export interface NeoDatabase {
   listTasks(tenantId?: string, opts?: { status?: TaskStatus; priority?: TaskPriority; limit?: number }): Promise<TaskRecord[]>;
   updateTask(
     id: string,
+    patch: Partial<
+      Pick<TaskRecord, 'status' | 'plan' | 'checkpoint' | 'result' | 'verification' | 'error' | 'usage' | 'loop_signature_counts' | 'completed_at'>
+    >
+  ): Promise<TaskRecord | null>;
+  updateTaskIfStatus(
+    id: string,
+    tenantId: string,
+    expectedStatuses: TaskStatus[],
     patch: Partial<
       Pick<TaskRecord, 'status' | 'plan' | 'checkpoint' | 'result' | 'verification' | 'error' | 'usage' | 'loop_signature_counts' | 'completed_at'>
     >
@@ -271,7 +280,7 @@ export interface NeoDatabase {
   listDynamicApis(tenantId?: string): Promise<DynamicApiRecord[]>;
   getDynamicApiBySlug(slug: string, tenantId?: string): Promise<DynamicApiRecord | null>;
   upsertDynamicApi(input: Omit<DynamicApiRecord, 'id' | 'call_count' | 'created_at' | 'updated_at'>): Promise<DynamicApiRecord>;
-  incrementDynamicApiCalls(slug: string): Promise<void>;
+  incrementDynamicApiCalls(slug: string, tenantId: string): Promise<void>;
   toggleDynamicApi(slug: string, enabled: boolean, tenantId?: string): Promise<DynamicApiRecord | null>;
 
   // Background Jobs & Autonomous Scheduler
@@ -287,8 +296,8 @@ export interface NeoDatabase {
 
   // Telemetry & Audit Logs
   recordTelemetry(input: Omit<LlmTelemetryRecord, 'id' | 'created_at'>): Promise<void>;
-  listTelemetry(limit?: number): Promise<LlmTelemetryRecord[]>;
-  getTelemetrySummary(): Promise<{
+  listTelemetry(limit?: number, tenantId?: string): Promise<LlmTelemetryRecord[]>;
+  getTelemetrySummary(tenantId?: string): Promise<{
     totalCalls: number;
     successRate: number;
     totalTokens: number;
@@ -302,4 +311,5 @@ export interface NeoDatabase {
   // Admin Config
   getAdminConfig(key: string): Promise<string | null>;
   setAdminConfig(key: string, value: string): Promise<void>;
+  setAdminConfigIfAbsent(key: string, value: string): Promise<boolean>;
 }

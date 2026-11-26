@@ -99,7 +99,8 @@ class KnowledgeDaemonService {
     jobQueue.registerHandler('knowledge_crawl', async (payload) => {
       const topic = String(payload.topic || '');
       const streamId = payload.streamId ? String(payload.streamId) : undefined;
-      return (await runKnowledgeCrawlForTopic(topic, streamId)) as unknown as Record<string, unknown>;
+      const tenantId = typeof payload.tenantId === 'string' ? payload.tenantId : 'global';
+      return (await runKnowledgeCrawlForTopic(topic, streamId, tenantId)) as unknown as Record<string, unknown>;
     });
 
     if (this.timer) return;
@@ -124,7 +125,7 @@ class KnowledgeDaemonService {
         const lastMs = stream.last_crawled_at ? new Date(stream.last_crawled_at).getTime() : 0;
         const dueMs = stream.interval_minutes * 60_000;
         if (!lastMs || now - lastMs >= dueMs) {
-          await jobQueue.enqueue('knowledge', 'knowledge_crawl', { topic: stream.topic, streamId: stream.id });
+          await jobQueue.enqueue('knowledge', 'knowledge_crawl', { topic: stream.topic, streamId: stream.id, tenantId: 'global' });
           queuedJobs++;
         }
       }
@@ -136,8 +137,9 @@ class KnowledgeDaemonService {
 
   async triggerManualLearn(topic: string, streamId?: string, tenantId = 'global'): Promise<CrawlResult> {
     const db = await getDb();
-    let targetStreamId = streamId;
-    if (!targetStreamId) {
+    // Topic streams are shared system records; workspace learning must not mutate the global schedule.
+    let targetStreamId = tenantId === 'global' ? streamId : undefined;
+    if (tenantId === 'global' && !targetStreamId) {
       const streams = await db.listTopicStreams();
       const match = streams.find((s) => s.topic.toLowerCase() === topic.toLowerCase());
       if (match) {

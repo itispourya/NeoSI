@@ -5,7 +5,7 @@ import { embeddingEngine } from './embeddings.ts';
 import { neoInferenceEngine } from './registry.ts';
 import type { RuntimeKind } from './types.ts';
 
-export const BENCHMARK_SUITE_VERSION = 'neo-bench-2026.1';
+export const BENCHMARK_SUITE_VERSION = 'neo-bench-2026.2-strict-target';
 
 export interface BenchmarkCase {
   id: string;
@@ -201,7 +201,8 @@ function taskTypeForCase(category: BenchmarkCase['category']): string {
 export async function runModelBenchmarkSuite(modelId = 'neo-embedded-core-v1'): Promise<ModelEvaluationRecord> {
   const db = await getDb();
   const model = await db.getModelById(modelId);
-  const targetRuntime: RuntimeKind = model?.runtime || 'embedded';
+  if (!model) throw new Error(`Model '${modelId}' is not registered; benchmarks must target a real registered model.`);
+  const targetRuntime: RuntimeKind = model.runtime;
 
   const details: ModelEvaluationRecord['details'] = [];
   const categorySums = new Map<string, { sum: number; count: number }>();
@@ -222,9 +223,11 @@ export async function runModelBenchmarkSuite(modelId = 'neo-embedded-core-v1'): 
         taskType: taskTypeForCase(testCase.category),
         preferredRuntime: targetRuntime,
         preferredModelId: modelId,
+        strictTarget: true,
         responseFormat: testCase.responseFormat || 'text',
       });
       tokens = res.completionTokens;
+      if (res.modelId !== modelId) throw new Error(`Runtime returned '${res.modelId}' instead of benchmark target '${modelId}'.`);
       const evalResult = await testCase.evaluate(res.text);
       score = evalResult.score;
       passed = evalResult.passed;

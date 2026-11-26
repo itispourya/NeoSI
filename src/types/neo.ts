@@ -118,7 +118,7 @@ export interface TaskInfo {
   goal: string;
   autonomy: 'low' | 'balanced' | 'high';
   priority: string;
-  status: 'pending' | 'planning' | 'running' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled';
+  status: 'pending' | 'planning' | 'running' | 'waiting_approval' | 'completed' | 'partial' | 'failed' | 'cancelled';
   plan: Array<{ stepIndex: number; title: string; actionType: string; toolId?: string; dependsOn: number[] }>;
   checkpoint: Record<string, unknown>;
   result: Record<string, unknown> | null;

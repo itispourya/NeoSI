@@ -37,6 +37,13 @@ export class NeoKnowledgeGraph {
     validTo?: string | null;
   }): Promise<GraphRelationshipRecord> {
     const db = await getDb();
+    const [source, target] = await Promise.all([
+      db.getEntityById(input.sourceEntityId, input.tenantId),
+      db.getEntityById(input.targetEntityId, input.tenantId),
+    ]);
+    if (!source || !target) {
+      throw new Error('Both relationship endpoints must exist in the authenticated workspace.');
+    }
     // Detect existing relationship with same source & relationType pointing to different target (contradiction tracking)
     const existing = await db.listRelationships(input.tenantId, input.sourceEntityId, 50);
     let contradictsId: string | null = null;
@@ -83,20 +90,9 @@ export class NeoKnowledgeGraph {
       entities.push(ent);
     }
 
-    let relationshipsAdded = 0;
-    for (let i = 0; i + 1 < entities.length && i < 4; i++) {
-      await this.addRelationship({
-        tenantId,
-        sourceEntityId: entities[i].id,
-        targetEntityId: entities[i + 1].id,
-        relationType: 'co_occurs_with',
-        sourceUrl: sourceUrl ?? null,
-        confidence: 0.72,
-      });
-      relationshipsAdded++;
-    }
-
-    return { entitiesAdded: entities.length, relationshipsAdded };
+    // Entity co-occurrence is not a semantic relationship. Do not fabricate graph edges.
+    // Relationships must be extracted with explicit evidence and validated by addRelationship().
+    return { entitiesAdded: entities.length, relationshipsAdded: 0 };
   }
 
   async searchEntities(tenantId: string, query: string, limit = 10): Promise<Array<GraphEntityRecord & { score: number }>> {
@@ -121,6 +117,8 @@ export class NeoKnowledgeGraph {
     edges: GraphRelationshipRecord[];
   }> {
     const db = await getDb();
+    const startEntity = await db.getEntityById(startEntityId, tenantId);
+    if (!startEntity) return { nodes: [], edges: [] };
     const allEntities = await db.listEntities(tenantId, { limit: 300 });
     const entityMap = new Map(allEntities.map((e) => [e.id, e]));
     const visited = new Set<string>([startEntityId]);
@@ -132,8 +130,10 @@ export class NeoKnowledgeGraph {
       for (const nodeId of frontier) {
         const rels = await db.listRelationships(tenantId, nodeId, 50);
         for (const r of rels) {
-          collectedEdges.push(r);
           const neighbor = r.source_entity_id === nodeId ? r.target_entity_id : r.source_entity_id;
+          // Ignore legacy or malformed edges that point outside this tenant's entity set.
+          if (!entityMap.has(r.source_entity_id) || !entityMap.has(r.target_entity_id)) continue;
+          collectedEdges.push(r);
           if (!visited.has(neighbor)) {
             visited.add(neighbor);
             nextFrontier.push(neighbor);

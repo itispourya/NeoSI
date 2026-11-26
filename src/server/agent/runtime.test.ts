@@ -59,6 +59,73 @@ test('7-layer memory storage, temporal superseding, and consolidation work persi
   assert.ok(summary.consolidatedSemantic >= 1);
 });
 
+test('hybrid memory search can retrieve exact lexical matches older than the recent vector window', async () => {
+  const db = await getDb();
+  const vector = new Array<number>(768).fill(1);
+  const base = {
+    tenant_id: 'global',
+    memory_type: 'semantic' as const,
+    topic: 'archive',
+    title: 'Archived note',
+    content: 'Ordinary historical knowledge without the rare lookup phrase.',
+    structured_facts: {},
+    source_url: null,
+    reliability_score: 0.9,
+    freshness_score: 1,
+    embedding: vector,
+    embedding_model: 'test-embedding-space-v1',
+    embedding_dim: 768,
+  };
+  const older = await db.insertMemory({
+    ...base,
+    title: 'Zebra Quasar Ledger Reconciliation',
+    content: 'The zebra quasar ledger phrase identifies the archived reconciliation procedure.',
+  });
+  for (let i = 0; i < 510; i++) {
+    await db.insertMemory({ ...base, title: `Recent noise note ${i}`, content: `Unrelated record ${i} with generic operational details.` });
+  }
+
+  const results = await db.searchMemories(vector, {
+    tenantId: 'global',
+    queryText: 'zebra quasar ledger reconciliation',
+    queryEmbeddingModel: 'test-embedding-space-v1',
+    limit: 5,
+  });
+  assert.ok(results.some((memory) => memory.id === older.id));
+});
+
+test('Dynamic API slugs and call counters remain isolated by workspace', async () => {
+  const db = await getDb();
+  const base = {
+    tenant_id: 'forge-tenant-a',
+    slug: 'tenant-isolated-endpoint',
+    name: 'Tenant A Endpoint',
+    description: 'Isolation regression test',
+    method: 'POST' as const,
+    input_schema: { type: 'object' as const },
+    output_schema: { type: 'object' as const },
+    handler_code: 'function handle(input) { return input; }',
+    test_code: "test('identity', () => { assert.equal(handle({ value: 1 }).value, 1); });",
+    test_report: { passed: 1, failed: 0, total: 1, durationMs: 1, details: [] },
+    openapi_spec: {},
+    rate_limit_rpm: 60,
+    enabled: true,
+  };
+  const created = await db.upsertDynamicApi(base);
+  assert.equal(created.tenant_id, 'forge-tenant-a');
+
+  await assert.rejects(
+    () => db.upsertDynamicApi({ ...base, tenant_id: 'forge-tenant-b', name: 'Tenant B takeover' }),
+    /reserved by another workspace/i
+  );
+
+  await db.incrementDynamicApiCalls(base.slug, 'forge-tenant-b');
+  assert.equal((await db.getDynamicApiBySlug(base.slug, 'forge-tenant-a'))?.call_count, 0);
+
+  await db.incrementDynamicApiCalls(base.slug, 'forge-tenant-a');
+  assert.equal((await db.getDynamicApiBySlug(base.slug, 'forge-tenant-a'))?.call_count, 1);
+});
+
 test('Knowledge Graph entity resolution, contradiction detection, and BFS traversal', async () => {
   const src = await knowledgeGraph.upsertEntity({ tenantId: 'global', name: 'Neos Core', entityType: 'system' });
   const tgtA = await knowledgeGraph.upsertEntity({ tenantId: 'global', name: 'Ollama Runtime', entityType: 'runtime' });
@@ -145,6 +212,59 @@ test('Durable AgentRuntime persists steps, executes tools, cancels cleanly, and 
   assert.equal(afterRecovery?.status, 'completed');
 });
 
+test('Agent execution never escalates beyond the scopes stored at task creation', async () => {
+  const task = await agentRuntime.createAndStartTask({
+    tenantId: 'global',
+    actor: 'scope-regression',
+    goal: 'Inspect code and run the requested workspace operation',
+    scopes: ['read'],
+    deferExecution: true,
+  });
+  const db = await getDb();
+  const steps = await db.listTaskSteps(task.id, 'global');
+  const candidate = steps.find((step) => step.tool_id === 'workspace_list_files');
+  assert.ok(candidate, 'deterministic code-inspection plan should contain workspace_list_files');
+  await db.upsertTaskStep({
+    ...candidate!,
+    action_type: 'tool_call',
+    tool_id: 'sandbox_execute_js',
+    input: { code: 'function handle(input) { return input; }', input: { value: 1 } },
+  });
+
+  const finished = await agentRuntime.executeTaskLoop(task.id, 'global', 'scope-regression', ['read', 'write']);
+  const finalSteps = await db.listTaskSteps(task.id, 'global');
+  const deniedStep = finalSteps.find((step) => step.step_index === candidate!.step_index);
+  assert.equal(deniedStep?.status, 'failed');
+  assert.match(deniedStep?.error || '', /Permission denied/i);
+  assert.notEqual(finished?.status, 'completed');
+  assert.deepEqual(finished?.checkpoint.executionScopes, ['read']);
+});
+
+test('atomic task transitions prevent late completion from overwriting cancellation', async () => {
+  const task = await agentRuntime.createAndStartTask({
+    tenantId: 'global',
+    actor: 'cancel-race-test',
+    goal: 'Check atomic task status transitions',
+    deferExecution: true,
+  });
+  const db = await getDb();
+  const claimed = await db.updateTaskIfStatus(task.id, 'global', ['planning'], { status: 'running' });
+  assert.equal(claimed?.status, 'running');
+
+  const cancelled = await db.updateTaskIfStatus(task.id, 'global', ['running'], {
+    status: 'cancelled',
+    completed_at: new Date().toISOString(),
+  });
+  assert.equal(cancelled?.status, 'cancelled');
+
+  const lateCompletion = await db.updateTaskIfStatus(task.id, 'global', ['running'], {
+    status: 'completed',
+    result: { answer: 'late' },
+  });
+  assert.equal(lateCompletion, null);
+  assert.equal((await db.getTaskById(task.id, 'global'))?.status, 'cancelled');
+});
+
 test('ModelRegistry checks hardware/licenses & Layer A/C/D evolution run end-to-end', async () => {
   await assert.rejects(
     () =>
@@ -169,7 +289,8 @@ test('ModelRegistry checks hardware/licenses & Layer A/C/D evolution run end-to-
   assert.equal(skillEval.passed, true);
 
   const proposal = await runCodeEvolutionProposal('unit-test-evolution');
-  assert.ok(['sandbox_passed', 'merged'].includes(proposal.status));
+  assert.equal(proposal.status, 'sandbox_passed');
+  assert.equal(proposal.auto_eligible, false);
   assert.ok(proposal.test_results.passed >= 2);
   assert.ok(proposal.benchmark_before.accuracyScore > 0);
   assert.ok(proposal.benchmark_after.accuracyScore > 0);
@@ -181,4 +302,7 @@ test('ModelRegistry checks hardware/licenses & Layer A/C/D evolution run end-to-
   });
   assert.ok(trainJob.dataset_size >= 1);
   assert.ok(trainJob.dataset_path && fs.existsSync(trainJob.dataset_path));
+  assert.equal(trainJob.status, 'dataset_ready_training_not_started');
+  assert.equal(trainJob.metrics.trainingStarted, false);
+  assert.equal(trainJob.metrics.adapterProduced, false);
 });

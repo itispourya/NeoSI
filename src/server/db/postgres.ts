@@ -45,7 +45,64 @@ import type {
   UpgradeStatus,
 } from './schema.ts';
 import { seedInitialData } from './seed.ts';
-import { computeBm25Scores, computeTemporalDecay, hybridRerank } from './vector.ts';
+import { computeBm25Scores, computeTemporalDecay, hybridRerank, tokenizeMultilingual } from './vector.ts';
+
+function toPgVectorLiteral(vector: number[]): string | null {
+  if (!Array.isArray(vector) || vector.length === 0) return null;
+  if (vector.length > 16_000 || vector.some((value) => !Number.isFinite(value))) {
+    throw new Error('Embedding must contain 1–16000 finite numeric dimensions.');
+  }
+  return `[${vector.map((value) => Number(value).toString()).join(',')}]`;
+}
+
+export function buildPostgresMemoryFilters(opts?: MemorySearchOptions): {
+  clauses: string[];
+  params: unknown[];
+  nextParameterIndex: number;
+} {
+  const clauses = ['deleted_at IS NULL'];
+  const params: unknown[] = [];
+  let index = 1;
+  if (opts?.memoryType) {
+    clauses.push('memory_type = $' + index++);
+    params.push(opts.memoryType);
+  }
+  if (opts?.tenantId) {
+    if (opts.includeGlobal) {
+      clauses.push('(tenant_id = $' + index++ + ' OR tenant_id = $' + index++ + ')');
+      params.push(opts.tenantId, 'global');
+    } else {
+      clauses.push('tenant_id = $' + index++);
+      params.push(opts.tenantId);
+    }
+  }
+  if (opts?.validAt) {
+    clauses.push('(valid_from IS NULL OR valid_from <= $' + index + ') AND (valid_to IS NULL OR valid_to >= $' + index + ')');
+    params.push(opts.validAt);
+    index++;
+  }
+  return { clauses, params, nextParameterIndex: index };
+}
+export function buildPostgresLexicalFilter(
+  terms: string[],
+  startParameterIndex: number
+): { sql: string; params: string[]; nextParameterIndex: number } {
+  if (!Number.isSafeInteger(startParameterIndex) || startParameterIndex < 1) {
+    throw new Error('PostgreSQL parameter indices start at 1.');
+  }
+  const normalized = Array.from(new Set(terms.map((term) => term.trim()).filter(Boolean))).slice(0, 8);
+  const params: string[] = [];
+  const clauses = normalized.map((term) => {
+    const placeholder = '$' + String(startParameterIndex + params.length);
+    params.push('%' + term + '%');
+    return '(topic ILIKE ' + placeholder + ' OR title ILIKE ' + placeholder + ' OR content ILIKE ' + placeholder + ')';
+  });
+  return {
+    sql: clauses.length > 0 ? '(' + clauses.join(' OR ') + ')' : 'FALSE',
+    params,
+    nextParameterIndex: startParameterIndex + params.length,
+  };
+}
 
 export class PostgresNeoDatabase implements NeoDatabase {
   public readonly mode = 'postgresql' as const;
@@ -60,7 +117,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
   }
 
   async init(): Promise<void> {
-    for (const file of ['001_init.sql', '002_neo_cognitive_core.sql', '003_neo_upgrade.sql']) {
+    for (const file of ['001_init.sql', '002_neo_cognitive_core.sql', '003_neo_upgrade.sql', '004_promoted_upgrade_status.sql', '005_variable_dimension_embeddings.sql']) {
       const migrationPath = path.resolve(process.cwd(), 'migrations', file);
       if (fs.existsSync(migrationPath)) {
         const sql = fs.readFileSync(migrationPath, 'utf8');
@@ -179,7 +236,13 @@ export class PostgresNeoDatabase implements NeoDatabase {
     const id = uuidv4();
     const embModel = input.embedding_model || 'neo-embed-local-v2';
     const embDim = input.embedding_dim ?? input.embedding.length;
-    const vecLiteral = embDim === 768 ? `[${input.embedding.join(',')}]` : null;
+    if (embDim !== input.embedding.length) {
+      throw new Error('Embedding metadata dimension does not match the supplied vector length.');
+    }
+    const vecLiteral = toPgVectorLiteral(input.embedding);
+    if (input.embedding.length > 0 && !vecLiteral) {
+      throw new Error('Embedding vector must contain finite numeric values.');
+    }
     const { rows } = await this.pool.query(
       `INSERT INTO memories (id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, embedding, embedding_model, embedding_dim)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::vector, $20, $21) RETURNING *`,
@@ -226,14 +289,30 @@ export class PostgresNeoDatabase implements NeoDatabase {
   async updateMemory(id: string, tenantId: string, patch: Parameters<NeoDatabase['updateMemory']>[2]): Promise<MemoryRecord | null> {
     const existing = await this.getMemoryById(id, tenantId, false);
     if (!existing) return null;
+    if (patch.embedding && patch.embedding_dim !== undefined && patch.embedding_dim !== patch.embedding.length) {
+      throw new Error('Embedding metadata dimension does not match the supplied vector length.');
+    }
+    if (!patch.embedding && (
+      (patch.embedding_model !== undefined && patch.embedding_model !== existing.embedding_model) ||
+      (patch.embedding_dim !== undefined && patch.embedding_dim !== existing.embedding_dim)
+    )) {
+      throw new Error('Embedding model or dimension cannot change without supplying the matching replacement vector.');
+    }
     const merged = {
       ...existing,
       ...patch,
       embedding_dim: patch.embedding_dim ?? (patch.embedding ? patch.embedding.length : existing.embedding_dim),
       version: existing.version + 1,
     };
+    if (patch.embedding && merged.embedding_dim !== patch.embedding.length) {
+      throw new Error('Embedding metadata dimension does not match the supplied vector length.');
+    }
+    const embeddingLiteral = patch.embedding ? toPgVectorLiteral(patch.embedding) : null;
+    if (patch.embedding && !embeddingLiteral) {
+      throw new Error('A replacement embedding must contain finite numeric values.');
+    }
     const { rows } = await this.pool.query(
-      `UPDATE memories SET title = $1, content = $2, topic = $3, structured_facts = $4, reliability_score = $5, freshness_score = $6, importance_score = $7, confidence_score = $8, epistemic_status = $9, retention_policy = $10, valid_from = $11, valid_to = $12, superseded_by = $13, version = $14, embedding_model = $15, embedding_dim = $16 WHERE id = $17 AND tenant_id = $18 RETURNING *`,
+      `UPDATE memories SET title = $1, content = $2, topic = $3, structured_facts = $4, reliability_score = $5, freshness_score = $6, importance_score = $7, confidence_score = $8, epistemic_status = $9, retention_policy = $10, valid_from = $11, valid_to = $12, superseded_by = $13, version = $14, embedding = COALESCE($15::vector, embedding), embedding_model = $16, embedding_dim = $17 WHERE id = $18 AND tenant_id = $19 RETURNING *`,
       [
         merged.title,
         merged.content,
@@ -249,6 +328,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
         merged.valid_to,
         merged.superseded_by,
         merged.version,
+        embeddingLiteral,
         merged.embedding_model,
         merged.embedding_dim,
         id,
@@ -299,28 +379,17 @@ export class PostgresNeoDatabase implements NeoDatabase {
 
   async searchMemories(queryEmbedding: number[], opts?: MemorySearchOptions): Promise<MemorySearchResult[]> {
     const queryModel = opts?.queryEmbeddingModel;
-    const canVector = queryEmbedding.length === 768;
-    const clauses: string[] = ['deleted_at IS NULL'];
-    const params: unknown[] = [];
-    let idx = 1;
-    if (opts?.memoryType) {
-      clauses.push(`memory_type = $${idx++}`);
-      params.push(opts.memoryType);
-    }
-    if (opts?.tenantId) {
-      if (opts.includeGlobal) {
-        clauses.push(`(tenant_id = $${idx++} OR tenant_id = $${idx++})`);
-        params.push(opts.tenantId, 'global');
-      } else {
-        clauses.push(`tenant_id = $${idx++}`);
-        params.push(opts.tenantId);
-      }
-    }
-
+    const canVector = queryEmbedding.length > 0 && queryEmbedding.length <= 16_000 && queryEmbedding.every(Number.isFinite) && queryEmbedding.some((value) => value !== 0);
+    const queryVectorLiteral = canVector ? toPgVectorLiteral(queryEmbedding) : null;
+    const filters = buildPostgresMemoryFilters(opts);
+    const clauses = filters.clauses;
+    const params = [...filters.params];
+    const idx = filters.nextParameterIndex;
+    const baseClauses = [...clauses];
+    const baseParams = [...params];
     let rows: Record<string, unknown>[];
-    if (canVector) {
-      const vecLiteral = `[${queryEmbedding.join(',')}]`;
-      params.unshift(vecLiteral);
+    if (canVector && queryVectorLiteral) {
+      params.unshift(queryVectorLiteral);
       // Re-index existing $ placeholders by +1
       const shiftedClauses = clauses.map((c) => c.replace(/\$(\d+)/g, (_, n) => `$${Number(n) + 1}`));
       const nextIdx = idx + 1;
@@ -330,7 +399,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
       params.push(150);
       const res = await this.pool.query(
         `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding_model, embedding_dim, created_at,
-         CASE WHEN embedding IS NOT NULL AND embedding_dim = 768 AND ${modelCheck} THEN 1 - (embedding <=> $1::vector) ELSE 0 END AS similarity
+         CASE WHEN embedding IS NOT NULL AND embedding_dim = ${queryEmbedding.length} AND ${modelCheck} THEN 1 - (embedding <=> $1::vector) ELSE 0 END AS similarity
          FROM memories WHERE ${shiftedClauses.join(' AND ')}
          ORDER BY similarity DESC, created_at DESC LIMIT $${limitIdx}`,
         params
@@ -346,16 +415,36 @@ export class PostgresNeoDatabase implements NeoDatabase {
       rows = res.rows;
     }
 
+    const queryTerms = opts?.queryText
+      ? Array.from(new Set(tokenizeMultilingual(opts.queryText).filter((term) => term.length >= 2))).slice(0, 8)
+      : [];
+    if (queryTerms.length > 0) {
+      const lexicalFilter = buildPostgresLexicalFilter(queryTerms, baseParams.length + 1);
+      const lexicalClauses = [...baseClauses, lexicalFilter.sql];
+      const lexicalParams: unknown[] = [...baseParams, ...lexicalFilter.params, 200];
+      const limitParameter = lexicalParams.length;
+      const lexicalResult = await this.pool.query(
+        `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding_model, embedding_dim, created_at, 0 AS similarity
+         FROM memories WHERE ${lexicalClauses.join(' AND ')} ORDER BY created_at DESC LIMIT $${limitParameter}`,
+        lexicalParams
+      );
+      const candidateMap = new Map(rows.map((row) => [String(row.id), row]));
+      for (const row of lexicalResult.rows as Record<string, unknown>[]) {
+        if (!candidateMap.has(String(row.id))) candidateMap.set(String(row.id), row);
+      }
+      rows = Array.from(candidateMap.values());
+    }
+
     if (rows.length === 0) return [];
     const bm25 = opts?.queryText
       ? computeBm25Scores(
           opts.queryText,
-          rows.map((r) => `${r.topic} ${r.title} ${r.content}`)
+          rows.map((row) => `${row.topic} ${row.title} ${row.content}`)
         )
       : rows.map(() => 0);
     const ranked = hybridRerank(
       rows.map((r, i) => ({
-        item: { ...r, embedding: [] } as MemoryRecord,
+        item: { ...r, embedding: [] } as unknown as MemoryRecord,
         vectorScore: Number(r.similarity || 0),
         lexicalScore: bm25[i] || 0,
         reliability: Number(r.reliability_score ?? 0.8),
@@ -364,7 +453,12 @@ export class PostgresNeoDatabase implements NeoDatabase {
       }))
     );
     const minScore = opts?.minScore ?? 0.04;
-    return ranked.filter((m) => m.similarity >= minScore || m.hybridScore >= minScore + 0.08).slice(0, opts?.limit ?? 8);
+    const filtered = ranked.filter((m) => m.similarity >= minScore || m.hybridScore >= minScore + 0.08).slice(0, opts?.limit ?? 8);
+    if (filtered.length > 0) {
+      const ids = filtered.map((memory) => memory.id);
+      await this.pool.query('UPDATE memories SET last_accessed_at = NOW() WHERE id = ANY($1::text[])', [ids]);
+    }
+    return filtered;
   }
 
   async countMemories(tenantId?: string): Promise<MemoryCounts> {
@@ -505,6 +599,14 @@ export class PostgresNeoDatabase implements NeoDatabase {
     return { ...rows[0], embedding: input.embedding };
   }
 
+  async getEntityById(id: string, tenantId: string): Promise<GraphEntityRecord | null> {
+    const { rows } = await this.pool.query(
+      'SELECT id, tenant_id, name, entity_type, aliases, attributes, confidence, created_at, updated_at FROM entities WHERE id = $1 AND tenant_id = $2',
+      [id, tenantId]
+    );
+    return rows[0] ? { ...rows[0], embedding: [] } : null;
+  }
+
   async listEntities(tenantId: string, opts?: { entityType?: string; query?: string; limit?: number }): Promise<GraphEntityRecord[]> {
     const clauses = ['tenant_id = $1'];
     const params: unknown[] = [tenantId];
@@ -609,6 +711,42 @@ export class PostgresNeoDatabase implements NeoDatabase {
         merged.completed_at,
         id,
       ]
+    );
+    return rows[0] || null;
+  }
+
+  async updateTaskIfStatus(
+    id: string,
+    tenantId: string,
+    expectedStatuses: TaskStatus[],
+    patch: Parameters<NeoDatabase['updateTask']>[1]
+  ): Promise<TaskRecord | null> {
+    if (expectedStatuses.length === 0) return null;
+    const columns: Record<string, { column: string; serialize: (value: unknown) => unknown }> = {
+      status: { column: 'status', serialize: (v) => v },
+      plan: { column: 'plan', serialize: (v) => JSON.stringify(v) },
+      checkpoint: { column: 'checkpoint', serialize: (v) => JSON.stringify(v) },
+      result: { column: 'result', serialize: (v) => v === null ? null : JSON.stringify(v) },
+      verification: { column: 'verification', serialize: (v) => v === null ? null : JSON.stringify(v) },
+      error: { column: 'error', serialize: (v) => v },
+      usage: { column: 'usage', serialize: (v) => JSON.stringify(v) },
+      loop_signature_counts: { column: 'loop_signature_counts', serialize: (v) => JSON.stringify(v) },
+      completed_at: { column: 'completed_at', serialize: (v) => v },
+    };
+    const assignments: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(patch)) {
+      const definition = columns[key];
+      if (!definition) continue;
+      values.push(definition.serialize(value));
+      assignments.push(`${definition.column} = ${values.length}`);
+    }
+    if (assignments.length === 0) return this.getTaskById(id, tenantId);
+    assignments.push('updated_at = NOW()');
+    values.push(id, tenantId, expectedStatuses);
+    const { rows } = await this.pool.query(
+      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ${values.length - 2} AND tenant_id = ${values.length - 1} AND status = ANY(${values.length}::text[]) RETURNING *`,
+      values
     );
     return rows[0] || null;
   }
@@ -939,14 +1077,16 @@ export class PostgresNeoDatabase implements NeoDatabase {
       `INSERT INTO dynamic_apis (id, tenant_id, slug, name, description, method, input_schema, output_schema, handler_code, test_code, test_report, openapi_spec, rate_limit_rpm, enabled)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description, method = EXCLUDED.method, input_schema = EXCLUDED.input_schema, output_schema = EXCLUDED.output_schema, handler_code = EXCLUDED.handler_code, test_code = EXCLUDED.test_code, test_report = EXCLUDED.test_report, openapi_spec = EXCLUDED.openapi_spec, rate_limit_rpm = EXCLUDED.rate_limit_rpm, enabled = EXCLUDED.enabled, updated_at = NOW()
+       WHERE dynamic_apis.tenant_id = EXCLUDED.tenant_id
        RETURNING *`,
       [uuidv4(), input.tenant_id, input.slug, input.name, input.description, input.method, JSON.stringify(input.input_schema), JSON.stringify(input.output_schema), input.handler_code, input.test_code, JSON.stringify(input.test_report), JSON.stringify(input.openapi_spec), input.rate_limit_rpm, input.enabled]
     );
+    if (!rows[0]) throw new Error('This endpoint slug is already reserved by another workspace.');
     return rows[0];
   }
 
-  async incrementDynamicApiCalls(slug: string): Promise<void> {
-    await this.pool.query('UPDATE dynamic_apis SET call_count = call_count + 1 WHERE slug = $1', [slug]);
+  async incrementDynamicApiCalls(slug: string, tenantId: string): Promise<void> {
+    await this.pool.query('UPDATE dynamic_apis SET call_count = call_count + 1 WHERE slug = $1 AND tenant_id = $2', [slug, tenantId]);
   }
 
   async toggleDynamicApi(slug: string, enabled: boolean, tenantId?: string): Promise<DynamicApiRecord | null> {
@@ -1022,13 +1162,15 @@ export class PostgresNeoDatabase implements NeoDatabase {
     );
   }
 
-  async listTelemetry(limit = 50): Promise<LlmTelemetryRecord[]> {
-    const { rows } = await this.pool.query('SELECT * FROM llm_telemetry ORDER BY created_at DESC LIMIT $1', [limit]);
+  async listTelemetry(limit = 50, tenantId?: string): Promise<LlmTelemetryRecord[]> {
+    const { rows } = tenantId
+      ? await this.pool.query('SELECT * FROM llm_telemetry WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2', [tenantId, limit])
+      : await this.pool.query('SELECT * FROM llm_telemetry ORDER BY created_at DESC LIMIT $1', [limit]);
     return rows;
   }
 
-  async getTelemetrySummary() {
-    const rows = await this.listTelemetry(500);
+  async getTelemetrySummary(tenantId?: string) {
+    const rows = await this.listTelemetry(500, tenantId);
     const totalCalls = rows.length;
     const successes = rows.filter((r) => r.success).length;
     const totalTokens = rows.reduce((s, r) => s + r.prompt_tokens + r.completion_tokens, 0);
@@ -1087,5 +1229,13 @@ export class PostgresNeoDatabase implements NeoDatabase {
       `INSERT INTO admin_config (key, value, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
       [key, value]
     );
+  }
+
+  async setAdminConfigIfAbsent(key: string, value: string): Promise<boolean> {
+    const result = await this.pool.query(
+      'INSERT INTO admin_config (key, value, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (key) DO NOTHING RETURNING key',
+      [key, value]
+    );
+    return (result.rowCount ?? 0) === 1;
   }
 }

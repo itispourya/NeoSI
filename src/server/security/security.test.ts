@@ -5,6 +5,7 @@ import {
   hashPasscode,
   redactPII,
   signWebhookPayload,
+  safeExternalFetch,
   validateExternalUrl,
   verifyPasscode,
   verifyWebhookSignature,
@@ -33,6 +34,11 @@ test('SSRF validator blocks loopback, link-local metadata, and private IP ranges
   assert.equal(validateExternalUrl('http://127.0.0.1:8080/admin').valid, false);
   assert.equal(validateExternalUrl('http://169.254.169.254/latest/meta-data').valid, false);
   assert.equal(validateExternalUrl('http://192.168.1.50/internal').valid, false);
+  assert.equal(validateExternalUrl('http://198.51.100.14/documentation').valid, false);
+  assert.equal(validateExternalUrl('http://203.0.113.9/documentation').valid, false);
+  assert.equal(validateExternalUrl('http://[2001:db8::1]/documentation').valid, false);
+  assert.equal(validateExternalUrl('http://[2002:c000:0201::1]/6to4').valid, false);
+  assert.equal(validateExternalUrl('http://[64:ff9b::a9fe:a9fe]/nat64').valid, false);
   assert.equal(validateExternalUrl('file:///etc/passwd').valid, false);
   assert.equal(validateExternalUrl('https://api.github.com/repos').valid, true);
 });
@@ -45,4 +51,37 @@ test('scrypt passcode hashing and scoped neos_live_ API key generation work dete
   const key = generateScopedApiKey();
   assert.ok(key.rawKey.startsWith('neos_live_'));
   assert.equal(key.hash.length, 64);
+});
+
+
+test('safe external fetch rejects cross-origin redirects before forwarding a request', async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => safeExternalFetch('https://public.example/start', {
+      lookupFn: async () => [{ address: '93.184.216.34', family: 4 }],
+      fetchImpl: async () => {
+        calls++;
+        return new Response(null, { status: 302, headers: { location: 'https://attacker.example/collect' } });
+      },
+    }),
+    /Cross-origin redirect blocked/
+  );
+  assert.equal(calls, 1);
+});
+
+test('safe external fetch enforces response byte limits while streaming', async () => {
+  await assert.rejects(
+    () => safeExternalFetch('https://public.example/large', {
+      maxBytes: 4,
+      lookupFn: async () => [{ address: '93.184.216.34', family: 4 }],
+      fetchImpl: async () => new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('1234'));
+          controller.enqueue(new TextEncoder().encode('5678'));
+          controller.close();
+        },
+      })),
+    }),
+    /Response exceeded max allowed size/
+  );
 });
