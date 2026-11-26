@@ -1229,16 +1229,6 @@ export class PostgresNeoDatabase implements NeoDatabase {
     return (result.rowCount ?? 0) === 1;
   }
 }
- + (startParameterIndex + params.length);
-    params.push(`%${term}%`);
-    return `(topic ILIKE ${placeholder} OR title ILIKE ${placeholder} OR content ILIKE ${placeholder})`;
-  });
-  return {
-    sql: clauses.length > 0 ? `(${clauses.join(' OR ')})` : 'FALSE',
-    params,
-    nextParameterIndex: startParameterIndex + params.length,
-  };
-}
 
 export class PostgresNeoDatabase implements NeoDatabase {
   public readonly mode = 'postgresql' as const;
