@@ -12,7 +12,7 @@ const createTaskSchema = z.object({
   priority: z.enum(['urgent_maintenance', 'user_task', 'scheduled_task', 'internal_improvement']).default('user_task'),
   budgets: z
     .object({
-      maxSteps: z.number().int().min(2).max(30).optional(),
+      maxSteps: z.number().int().min(3).max(30).optional(),
       maxToolCalls: z.number().int().min(1).max(20).optional(),
       maxDurationMs: z.number().int().min(2000).max(180_000).optional(),
     })
