@@ -127,7 +127,8 @@ tasksRouter.get('/tasks/:id/events', requireApiGatewayAuth('read'), asyncHandler
     if (!res.writableEnded) res.end();
   }, 45_000);
 
-  req.on('close', () => {
+  // Keep the event subscription alive for the response lifetime; the request body completes immediately.
+  res.on('close', () => {
     clearTimeout(safetyTimer);
     unsubscribe();
   });
