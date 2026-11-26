@@ -47,6 +47,14 @@ import type {
 import { seedInitialData } from './seed.ts';
 import { computeBm25Scores, computeTemporalDecay, hybridRerank } from './vector.ts';
 
+function toPgVectorLiteral(vector: number[]): string | null {
+  if (!Array.isArray(vector) || vector.length === 0) return null;
+  if (vector.length > 16_000 || vector.some((value) => !Number.isFinite(value))) {
+    throw new Error('Embedding must contain 1–16000 finite numeric dimensions.');
+  }
+  return `[${vector.map((value) => Number(value).toString()).join(',')}]`;
+}
+
 export class PostgresNeoDatabase implements NeoDatabase {
   public readonly mode = 'postgresql' as const;
   private pool: Pool;
@@ -179,7 +187,10 @@ export class PostgresNeoDatabase implements NeoDatabase {
     const id = uuidv4();
     const embModel = input.embedding_model || 'neo-embed-local-v2';
     const embDim = input.embedding_dim ?? input.embedding.length;
-    const vecLiteral = embDim === 768 ? `[${input.embedding.join(',')}]` : null;
+    if (embDim !== input.embedding.length) {
+      throw new Error('Embedding metadata dimension does not match the supplied vector length.');
+    }
+    const vecLiteral = toPgVectorLiteral(input.embedding);
     const { rows } = await this.pool.query(
       `INSERT INTO memories (id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, embedding, embedding_model, embedding_dim)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::vector, $20, $21) RETURNING *`,
@@ -232,8 +243,12 @@ export class PostgresNeoDatabase implements NeoDatabase {
       embedding_dim: patch.embedding_dim ?? (patch.embedding ? patch.embedding.length : existing.embedding_dim),
       version: existing.version + 1,
     };
+    if (patch.embedding && merged.embedding_dim !== patch.embedding.length) {
+      throw new Error('Embedding metadata dimension does not match the supplied vector length.');
+    }
+    const embeddingLiteral = patch.embedding ? toPgVectorLiteral(patch.embedding) : null;
     const { rows } = await this.pool.query(
-      `UPDATE memories SET title = $1, content = $2, topic = $3, structured_facts = $4, reliability_score = $5, freshness_score = $6, importance_score = $7, confidence_score = $8, epistemic_status = $9, retention_policy = $10, valid_from = $11, valid_to = $12, superseded_by = $13, version = $14, embedding_model = $15, embedding_dim = $16 WHERE id = $17 AND tenant_id = $18 RETURNING *`,
+      `UPDATE memories SET title = $1, content = $2, topic = $3, structured_facts = $4, reliability_score = $5, freshness_score = $6, importance_score = $7, confidence_score = $8, epistemic_status = $9, retention_policy = $10, valid_from = $11, valid_to = $12, superseded_by = $13, version = $14, embedding = COALESCE($15::vector, embedding), embedding_model = $16, embedding_dim = $17 WHERE id = $18 AND tenant_id = $19 RETURNING *`,
       [
         merged.title,
         merged.content,
@@ -249,6 +264,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
         merged.valid_to,
         merged.superseded_by,
         merged.version,
+        embeddingLiteral,
         merged.embedding_model,
         merged.embedding_dim,
         id,
@@ -299,7 +315,8 @@ export class PostgresNeoDatabase implements NeoDatabase {
 
   async searchMemories(queryEmbedding: number[], opts?: MemorySearchOptions): Promise<MemorySearchResult[]> {
     const queryModel = opts?.queryEmbeddingModel;
-    const canVector = queryEmbedding.length === 768;
+    const canVector = queryEmbedding.length > 0 && queryEmbedding.length <= 16_000 && queryEmbedding.every(Number.isFinite);
+    const queryVectorLiteral = canVector ? toPgVectorLiteral(queryEmbedding) : null;
     const clauses: string[] = ['deleted_at IS NULL'];
     const params: unknown[] = [];
     let idx = 1;
@@ -309,18 +326,22 @@ export class PostgresNeoDatabase implements NeoDatabase {
     }
     if (opts?.tenantId) {
       if (opts.includeGlobal) {
-        clauses.push(`(tenant_id = $${idx++} OR tenant_id = $${idx++})`);
+        clauses.push(`(tenant_id = ${idx++} OR tenant_id = ${idx++})`);
         params.push(opts.tenantId, 'global');
       } else {
-        clauses.push(`tenant_id = $${idx++}`);
+        clauses.push(`tenant_id = ${idx++}`);
         params.push(opts.tenantId);
       }
     }
+    if (opts?.validAt) {
+      clauses.push(`(valid_from IS NULL OR valid_from <= ${idx}) AND (valid_to IS NULL OR valid_to >= ${idx})`);
+      params.push(opts.validAt);
+      idx++;
+    }
 
     let rows: Record<string, unknown>[];
-    if (canVector) {
-      const vecLiteral = `[${queryEmbedding.join(',')}]`;
-      params.unshift(vecLiteral);
+    if (canVector && queryVectorLiteral) {
+      params.unshift(queryVectorLiteral);
       // Re-index existing $ placeholders by +1
       const shiftedClauses = clauses.map((c) => c.replace(/\$(\d+)/g, (_, n) => `$${Number(n) + 1}`));
       const nextIdx = idx + 1;
@@ -330,7 +351,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
       params.push(150);
       const res = await this.pool.query(
         `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding_model, embedding_dim, created_at,
-         CASE WHEN embedding IS NOT NULL AND embedding_dim = 768 AND ${modelCheck} THEN 1 - (embedding <=> $1::vector) ELSE 0 END AS similarity
+         CASE WHEN embedding IS NOT NULL AND embedding_dim = ${queryEmbedding.length} AND ${modelCheck} THEN 1 - (embedding <=> $1::vector) ELSE 0 END AS similarity
          FROM memories WHERE ${shiftedClauses.join(' AND ')}
          ORDER BY similarity DESC, created_at DESC LIMIT $${limitIdx}`,
         params
