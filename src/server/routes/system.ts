@@ -47,12 +47,11 @@ systemRouter.get('/capabilities', requireApiGatewayAuth('read'), async (_req, re
 systemRouter.get('/metrics', requireApiGatewayAuth('read'), async (req, res) => {
   const tenantId = req.neoAuth!.tenant.id;
   const db = await getDb();
-  const [memoryCounts, telemetry, tasks, toolExecutions, scheduledJobs, hardware] = await Promise.all([
+  const [memoryCounts, telemetry, tasks, toolExecutions, hardware] = await Promise.all([
     db.countMemories(tenantId),
     db.getTelemetrySummary(tenantId),
     db.listTasks(tenantId, { limit: 100 }),
     db.listToolExecutions(tenantId, 100),
-    db.listScheduledJobs(),
     inspectHardware(),
   ]);
 
