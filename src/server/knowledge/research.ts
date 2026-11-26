@@ -11,13 +11,23 @@ import { storeMemory } from './memory.ts';
  * but must never enter synthesis, citations, long-term memory, or graph extraction.
  */
 export function selectResearchEvidence(sources: DiscoveredSource[], minimumReliability = 0.5): DiscoveredSource[] {
+  if (!Number.isFinite(minimumReliability) || minimumReliability < 0 || minimumReliability > 1) {
+    throw new RangeError('minimumReliability must be a finite number between 0 and 1.');
+  }
+
   return sources.filter((source) => {
-    if (source.injectionFlagged) return false;
-    if (!Number.isFinite(source.reliabilityScore) || source.reliabilityScore < minimumReliability) return false;
-    if (!source.content.trim()) return false;
+    if (!source || source.injectionFlagged !== false) return false;
+    if (typeof source.reliabilityScore !== 'number' || !Number.isFinite(source.reliabilityScore)) return false;
+    if (source.reliabilityScore < minimumReliability || source.reliabilityScore > 1) return false;
+    if (typeof source.content !== 'string' || !source.content.trim()) return false;
+    if (typeof source.url !== 'string' || source.url.length > 2048) return false;
+
     try {
       const url = new URL(source.url);
-      return url.protocol === 'https:' || url.protocol === 'http:';
+      // Evidence must be web-addressable and must not contain embedded credentials.
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+      if (!url.hostname || url.username || url.password) return false;
+      return true;
     } catch {
       return false;
     }
