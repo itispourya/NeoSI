@@ -191,6 +191,9 @@ export class PostgresNeoDatabase implements NeoDatabase {
       throw new Error('Embedding metadata dimension does not match the supplied vector length.');
     }
     const vecLiteral = toPgVectorLiteral(input.embedding);
+    if (input.embedding.length > 0 && !vecLiteral) {
+      throw new Error('Embedding vector must contain finite numeric values.');
+    }
     const { rows } = await this.pool.query(
       `INSERT INTO memories (id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, embedding, embedding_model, embedding_dim)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::vector, $20, $21) RETURNING *`,
@@ -237,6 +240,15 @@ export class PostgresNeoDatabase implements NeoDatabase {
   async updateMemory(id: string, tenantId: string, patch: Parameters<NeoDatabase['updateMemory']>[2]): Promise<MemoryRecord | null> {
     const existing = await this.getMemoryById(id, tenantId, false);
     if (!existing) return null;
+    if (patch.embedding && patch.embedding_dim !== undefined && patch.embedding_dim !== patch.embedding.length) {
+      throw new Error('Embedding metadata dimension does not match the supplied vector length.');
+    }
+    if (!patch.embedding && (
+      (patch.embedding_model !== undefined && patch.embedding_model !== existing.embedding_model) ||
+      (patch.embedding_dim !== undefined && patch.embedding_dim !== existing.embedding_dim)
+    )) {
+      throw new Error('Embedding model or dimension cannot change without supplying the matching replacement vector.');
+    }
     const merged = {
       ...existing,
       ...patch,
@@ -247,6 +259,9 @@ export class PostgresNeoDatabase implements NeoDatabase {
       throw new Error('Embedding metadata dimension does not match the supplied vector length.');
     }
     const embeddingLiteral = patch.embedding ? toPgVectorLiteral(patch.embedding) : null;
+    if (patch.embedding && !embeddingLiteral) {
+      throw new Error('A replacement embedding must contain finite numeric values.');
+    }
     const { rows } = await this.pool.query(
       `UPDATE memories SET title = $1, content = $2, topic = $3, structured_facts = $4, reliability_score = $5, freshness_score = $6, importance_score = $7, confidence_score = $8, epistemic_status = $9, retention_policy = $10, valid_from = $11, valid_to = $12, superseded_by = $13, version = $14, embedding = COALESCE($15::vector, embedding), embedding_model = $16, embedding_dim = $17 WHERE id = $18 AND tenant_id = $19 RETURNING *`,
       [
