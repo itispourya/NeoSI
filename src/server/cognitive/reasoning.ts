@@ -121,8 +121,9 @@ export class ReasoningEngine {
     }
 
     // Stage 12 (pre-critic synthesis): Synthesize grounded final answer via sovereign InferenceEngine
+    const contextForPrompt = input.context && input.piiRedaction ? redactUnknownObject(input.context) : input.context;
     const promptParts = [
-      input.context ? `Workspace Context:\n${sanitizeUntrustedContent(JSON.stringify(input.context).slice(0, 1800), 'workspace_context').wrappedData` : '',
+      input.context ? `Workspace Context:\n${sanitizeUntrustedContent(JSON.stringify(contextForPrompt).slice(0, 1800), 'workspace_context').wrappedData}` : '',
       ragFormatted ? `Retrieved Context:\n${ragFormatted}` : '',
       evidenceUsed.length > 0 ? `Tool Evidence:\n${evidenceUsed.join('\n')}` : '',
       toolOutputsForCritic.some((tool) => !tool.ok)
