@@ -415,7 +415,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
       const limitParameter = lexicalParams.length;
       const lexicalResult = await this.pool.query(
         `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding_model, embedding_dim, created_at, 0 AS similarity
-         FROM memories WHERE ${lexicalClauses.join(' AND ')} ORDER BY created_at DESC LIMIT ${limitParameter}`,
+         FROM memories WHERE ${lexicalClauses.join(' AND ')} ORDER BY created_at DESC LIMIT $${limitParameter}`,
         lexicalParams
       );
       const candidateMap = new Map(rows.map((row) => [String(row.id), row]));
