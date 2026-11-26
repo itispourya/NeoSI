@@ -48,13 +48,13 @@ Set `NODE_ENV=production` and configure `NEO_SESSION_SECRET` with at least 32 by
 openssl rand -hex 32
 ```
 
-Also configure the database credentials, trusted proxy hop count, CORS origins, and model runtime endpoint for the deployment. Docker Compose fails fast if `NEO_SESSION_SECRET` is missing; standalone Node execution logs a security warning and generates an ephemeral 256-bit secret when omitted.
+Also configure the database credentials, trusted proxy hop count, CORS origins, and model runtime endpoint for the deployment. Production startup fails if `NEO_SESSION_SECRET` is missing or shorter than 32 bytes. Do not use ephemeral session secrets in production.
 
-The default production Compose setup does not expose PostgreSQL or Redis to the public network; their published ports bind to host loopback. PostgreSQL and Redis both require credentials. Set `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `NEO_SESSION_SECRET` in the Compose `.env` file.
+The default production Compose setup does not expose PostgreSQL or Redis to the public network; their published ports bind to host loopback. PostgreSQL and Redis both require credentials. Set `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `NEO_SESSION_SECRET` in the Compose `.env` file. For first-time admin setup, also set `NEO_ADMIN_SETUP_TOKEN` to at least 32 random bytes, or set `NEO_ADMIN_PASSCODE` (at least 12 characters) to disable passcode claiming and use direct login. The setup token is required to claim the initial admin passcode in production and is never returned by the status endpoint.
 
 ```bash
 cp .env.example .env
-# Set POSTGRES_PASSWORD and NEO_SESSION_SECRET in .env before starting.
+# Set POSTGRES_PASSWORD, REDIS_PASSWORD, NEO_SESSION_SECRET, and NEO_ADMIN_SETUP_TOKEN in .env before starting.
 docker compose --profile gpu-single up -d --build
 ```
 
@@ -68,4 +68,4 @@ bun run test
 bun run build
 ```
 
-GitHub Actions runs the typecheck, test suite, and production frontend build on branch pushes and pull requests.
+GitHub Actions runs frozen dependency installation, typechecking, tests, frontend build, Docker image build, and a production-container health smoke test on branch pushes and pull requests.

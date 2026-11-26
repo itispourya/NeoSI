@@ -24,7 +24,7 @@ services:
     volumes:
       - neo_redis:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -73,6 +73,8 @@ services:
       NEO_VLLM_BASE_URL: http://vllm-gpu:8000
       NEO_SANDBOX_MODE: ${NEO_SANDBOX_MODE:-subprocess}
       NEO_SESSION_SECRET: ${NEO_SESSION_SECRET:?Set NEO_SESSION_SECRET to at least 32 random bytes in the .env file}
+      NEO_ADMIN_PASSCODE: ${NEO_ADMIN_PASSCODE:-}
+      NEO_ADMIN_SETUP_TOKEN: ${NEO_ADMIN_SETUP_TOKEN:-}
       NEO_TRUST_PROXY_HOPS: ${NEO_TRUST_PROXY_HOPS:-0}
       NEO_SCHEDULER_ENABLED: "true"
     depends_on:

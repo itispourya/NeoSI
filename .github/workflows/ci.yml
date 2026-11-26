@@ -48,3 +48,22 @@ jobs:
 
       - name: Production Docker image build
         run: docker build --tag neosi-ci .
+
+      - name: Container smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name neosi-smoke -p 127.0.0.1:3100:3000 \
+            -e NEO_SESSION_SECRET=ci-session-secret-at-least-32-bytes-long \
+            -e NEO_ADMIN_SETUP_TOKEN=ci-admin-setup-token-at-least-32-bytes-long \
+            -e NEO_SCHEDULER_ENABLED=false neosi-ci
+          trap 'docker rm -f neosi-smoke >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3100/api/v1/health >/dev/null; then
+              echo "Container health endpoint passed."
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs neosi-smoke
+          exit 1
