@@ -70,7 +70,13 @@ export function sanitizeUntrustedContent(rawText: string, sourceLabel = 'externa
 } {
   const analysis = detectPromptInjection(rawText);
   const safeLabel = sourceLabel.replace(/[^a-zA-Z0-9._:/-]/g, '_').slice(0, 120);
-  const wrappedData = `<untrusted_data source="${safeLabel}">\n${analysis.sanitizedText.slice(0, 12000)}\n</untrusted_data>`;
+  // Escape markup from the source so it cannot close or forge our trust-boundary tags.
+  const escapedContent = analysis.sanitizedText
+    .slice(0, 12000)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const wrappedData = `<untrusted_data source="${safeLabel}">\n${escapedContent}\n</untrusted_data>`;
   return {
     cleanText: analysis.sanitizedText,
     flagged: analysis.flagged,
