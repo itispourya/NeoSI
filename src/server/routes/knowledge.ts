@@ -29,7 +29,7 @@ knowledgeRouter.post('/research', requireApiGatewayAuth('write'), async (req, re
       query: parsed.data.query,
       urls: parsed.data.urls,
     });
-    return res.status(201).json({ report });
+    return res.status(report.status === 'completed' ? 201 : 503).json({ report });
   } catch (err) {
     return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
