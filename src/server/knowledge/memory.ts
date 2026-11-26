@@ -1,6 +1,7 @@
 import { getDb, type MemorySearchResult } from '../db/adapter.ts';
 import type { EpistemicStatus, MemoryType, RetentionPolicy, SkillRecord } from '../db/schema.ts';
 import { cosineSimilarity } from '../db/vector.ts';
+import { sanitizeUntrustedContent } from '../security/promptGuard.ts';
 import { embeddingEngine } from '../inference/embeddings.ts';
 
 export interface RagContextBundle {
