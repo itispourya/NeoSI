@@ -54,9 +54,14 @@ export function TasksView({ data, onRefresh }: TasksViewProps) {
   const [objDesc, setObjDesc] = useState('');
 
   const cancelTask = async (taskId: string) => {
-    await apiFetch(`/api/v1/tasks/${taskId}/cancel`, { method: 'POST', body: '{}' });
-    await inspectTask(taskId);
-    await onRefresh();
+    setError(null);
+    try {
+      await apiFetch(`/api/v1/tasks/${taskId}/cancel`, { method: 'POST', body: '{}' });
+      await inspectTask(taskId);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel task');
+    }
   };
 
   const resumeTask = async (taskId: string) => {
@@ -88,11 +93,16 @@ export function TasksView({ data, onRefresh }: TasksViewProps) {
   };
 
   const updateObjectiveStatus = async (id: string, status: 'active' | 'paused' | 'achieved') => {
-    await apiFetch(`/api/v1/objectives/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status, progress_pct: status === 'achieved' ? 100 : undefined }),
-    });
-    await onRefresh();
+    setError(null);
+    try {
+      await apiFetch(`/api/v1/objectives/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status, progress_pct: status === 'achieved' ? 100 : undefined }),
+      });
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update objective');
+    }
   };
 
   const objectives = data.objectives || [];

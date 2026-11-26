@@ -43,6 +43,10 @@ export async function runKnowledgeCrawlForTopic(topic: string, streamId?: string
       injection_flagged: src.injectionFlagged,
     });
 
+    if (src.injectionFlagged) {
+      continue;
+    }
+
     if (existingUrls.has(src.url) && existingMemories.some((m) => m.source_url === src.url && m.topic === topic)) {
       continue;
     }

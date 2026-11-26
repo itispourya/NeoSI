@@ -14,6 +14,7 @@ import { scheduleReflection } from '../knowledge/reflection.ts';
 import { executePromotedModule, generateSovereignLocalResponse } from '../neo/sovereignEngine.ts';
 import { requireApiGatewayAuth } from '../security/auth.ts';
 import { redactPII, redactUnknownObject, safeExternalFetch, signWebhookPayload, validateExternalUrlAsync } from '../security/crypto.ts';
+import { asyncHandler } from '../security/headers.ts';
 import { sanitizeUntrustedContent } from '../security/promptGuard.ts';
 
 export const coreRouter = Router();
@@ -41,21 +42,21 @@ async function resolveOrCreateConversation(tenantId: string, conversationId: str
   });
 }
 
-coreRouter.get('/conversations', requireApiGatewayAuth('read'), async (req, res) => {
+coreRouter.get('/conversations', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const conversations = await db.listConversations(req.neoAuth!.tenant.id, 40);
   res.json({ conversations });
-});
+}));
 
-coreRouter.get('/conversations/:id/messages', requireApiGatewayAuth('read'), async (req, res) => {
+coreRouter.get('/conversations/:id/messages', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const conv = await db.getConversationById(String(req.params.id), req.neoAuth!.tenant.id);
   if (!conv) return res.status(404).json({ error: 'Conversation not found' });
   const messages = await db.listMessages(conv.id, req.neoAuth!.tenant.id, 100);
   return res.json({ conversation: conv, messages });
-});
+}));
 
-coreRouter.post('/chat', requireApiGatewayAuth('write'), async (req, res) => {
+coreRouter.post('/chat', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = chatSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid chat request', issues: parsed.error.issues });
@@ -108,9 +109,9 @@ coreRouter.post('/chat', requireApiGatewayAuth('write'), async (req, res) => {
     verification: out.verification,
     latencyMs: out.latencyMs,
   });
-});
+}));
 
-coreRouter.post('/chat/stream', requireApiGatewayAuth('write'), async (req, res) => {
+coreRouter.post('/chat/stream', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = chatSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid request body', issues: parsed.error.issues });
@@ -261,11 +262,11 @@ coreRouter.post('/chat/stream', requireApiGatewayAuth('write'), async (req, res)
     sendEvent('done', finalMeta || { conversationId: conv.id, ok: true });
     res.end();
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    sendEvent('error', { error: msg });
+    console.error('[Neo Core] /chat/stream failed:', err);
+    sendEvent('error', { error: 'Streaming inference failed. Inspect server logs.' });
     res.end();
   }
-});
+}));
 
 const reasonSchema = z.object({
   query: z.string().min(2).max(16000),
@@ -274,7 +275,7 @@ const reasonSchema = z.object({
   context: z.record(z.string(), z.unknown()).optional(),
 });
 
-coreRouter.post('/reason', requireApiGatewayAuth('read'), async (req, res) => {
+coreRouter.post('/reason', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const parsed = reasonSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid reasoning payload', issues: parsed.error.issues });
@@ -291,19 +292,19 @@ coreRouter.post('/reason', requireApiGatewayAuth('read'), async (req, res) => {
     piiRedaction: tenant.pii_redaction,
   });
   return res.json(result);
-});
+}));
 
 const planSchema = z.object({
   goal: z.string().min(3).max(4000),
   autonomy: z.enum(['low', 'balanced', 'high']).default('balanced'),
 });
 
-coreRouter.post('/plan', requireApiGatewayAuth('read'), async (req, res) => {
+coreRouter.post('/plan', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const parsed = planSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid plan payload', issues: parsed.error.issues });
   const plan = taskPlanner.buildPlan(parsed.data.goal, parsed.data.autonomy);
   return res.json(plan);
-});
+}));
 
 const verifySchema = z.object({
   goal: z.string().min(2).max(4000),
@@ -312,7 +313,7 @@ const verifySchema = z.object({
   generatedCode: z.string().optional(),
 });
 
-coreRouter.post('/verify', requireApiGatewayAuth('read'), async (req, res) => {
+coreRouter.post('/verify', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const parsed = verifySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid verify payload', issues: parsed.error.issues });
   const verdict = criticEngine.verify({
@@ -322,7 +323,7 @@ coreRouter.post('/verify', requireApiGatewayAuth('read'), async (req, res) => {
     generatedCode: parsed.data.generatedCode,
   });
   return res.json(verdict);
-});
+}));
 
 const businessSchema = z.object({
   workspaceName: z.string().optional(),
@@ -335,7 +336,7 @@ const businessSchema = z.object({
   deliverWebhook: z.boolean().optional(),
 });
 
-coreRouter.post('/business/analyze', requireApiGatewayAuth('write'), async (req, res) => {
+coreRouter.post('/business/analyze', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = businessSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid business payload', issues: parsed.error.issues });
@@ -386,9 +387,10 @@ coreRouter.post('/business/analyze', requireApiGatewayAuth('write'), async (req,
 
     return res.json({ ...analysis, webhookDelivered });
   } catch (err) {
-    return res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    console.error('[Neo Core] /business/analyze failed:', err);
+    return res.status(502).json({ error: 'Business analysis failed. Inspect server logs.' });
   }
-});
+}));
 
 const engineerSchema = z.object({
   task: z.string().min(4).max(8000),
@@ -396,7 +398,7 @@ const engineerSchema = z.object({
   existingCode: z.string().optional(),
 });
 
-coreRouter.post('/engineer/task', requireApiGatewayAuth('write'), async (req, res) => {
+coreRouter.post('/engineer/task', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = engineerSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid engineering task payload', issues: parsed.error.issues });
@@ -420,14 +422,15 @@ coreRouter.post('/engineer/task', requireApiGatewayAuth('write'), async (req, re
     });
     return res.json(result);
   } catch (err) {
-    return res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    console.error('[Neo Core] /engineer/task failed:', err);
+    return res.status(502).json({ error: 'Engineering task execution failed. Inspect server logs.' });
   }
-});
+}));
 
-coreRouter.post('/modules/:id/execute', requireApiGatewayAuth('forge'), async (req, res) => {
+coreRouter.post('/modules/:id/execute', requireApiGatewayAuth('forge'), asyncHandler(async (req, res) => {
   const result = executePromotedModule(String(req.params.id), req.body ?? {});
   if (!result.ok) {
     return res.status(400).json({ error: result.error });
   }
   return res.json({ output: result.output, durationMs: result.durationMs, logs: result.logs, isolation: result.isolation });
-});
+}));

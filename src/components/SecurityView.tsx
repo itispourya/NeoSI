@@ -35,14 +35,23 @@ export function SecurityView({ data, onRefresh }: SecurityViewProps) {
 
   const rotateKey = async (id: string) => {
     setError(null);
-    const res = await apiFetch<{ rawKey: string }>(`/api/admin/keys/${id}/rotate`, { method: 'POST', body: '{}' });
-    setNewRawKey(res.rawKey);
-    await onRefresh();
+    try {
+      const res = await apiFetch<{ rawKey: string }>(`/api/admin/keys/${id}/rotate`, { method: 'POST', body: '{}' });
+      setNewRawKey(res.rawKey);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Key rotation failed');
+    }
   };
 
   const revokeKey = async (id: string) => {
-    await apiFetch(`/api/admin/keys/${id}`, { method: 'DELETE' });
-    await onRefresh();
+    setError(null);
+    try {
+      await apiFetch(`/api/admin/keys/${id}`, { method: 'DELETE' });
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Key revocation failed');
+    }
   };
 
   const createTenant = async (e: React.FormEvent) => {

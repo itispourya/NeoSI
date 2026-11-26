@@ -188,8 +188,15 @@ class DurableAgentRuntime {
 
   async recoverInterruptedTasks(): Promise<number> {
     const db = await getDb();
-    const active = await db.listTasks(undefined, { limit: 100 });
-    const interrupted = active.filter((t) => t.status === 'running' || t.status === 'planning');
+    const [runningTasks, planningTasks] = await Promise.all([
+      db.listTasks(undefined, { status: 'running', limit: 100 }),
+      db.listTasks(undefined, { status: 'planning', limit: 100 }),
+    ]);
+    const interruptedMap = new Map<string, TaskRecord>();
+    for (const t of [...runningTasks, ...planningTasks]) {
+      interruptedMap.set(t.id, t);
+    }
+    const interrupted = Array.from(interruptedMap.values());
     for (const task of interrupted) {
       await this.emitEvent(task.id, task.tenant_id, 'task.recovered', {
         previousStatus: task.status,

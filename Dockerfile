@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY package.json ./
-RUN npm install --omit=dev && npm install tsx
+RUN npm install --omit=dev && npm install --no-save tsx
 
 COPY . .
 RUN npm run build

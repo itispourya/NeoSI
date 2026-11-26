@@ -69,7 +69,19 @@ export async function streamChat(
 
   if (!res.ok || !res.body) {
     const errText = await res.text();
-    throw new Error(errText || `Stream failed (${res.status})`);
+    let parsedErr: { error?: string; authRequired?: boolean } = {};
+    try {
+      parsedErr = errText ? (JSON.parse(errText) as { error?: string; authRequired?: boolean }) : {};
+    } catch {
+      parsedErr = {};
+    }
+    const err = new Error(parsedErr.error || errText || `Stream failed (${res.status})`) as Error & {
+      authRequired?: boolean;
+      status?: number;
+    };
+    err.authRequired = Boolean(parsedErr.authRequired || res.status === 401);
+    err.status = res.status;
+    throw err;
   }
 
   const reader = res.body.getReader();
@@ -86,8 +98,13 @@ export async function streamChat(
       const eventLine = frame.match(/^event:\s*(.+)$/m)?.[1]?.trim();
       const dataLine = frame.match(/^data:\s*(.+)$/m)?.[1]?.trim();
       if (!eventLine || !dataLine) continue;
-      const parsed = JSON.parse(dataLine);
-      if (eventLine === 'meta') handlers.onMeta?.(parsed);
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(dataLine) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (eventLine === 'meta') handlers.onMeta?.(parsed as { conversationId?: string; language: string; ragMatches: number; piiRedacted: boolean; engine?: string });
       else if (eventLine === 'delta') handlers.onDelta(String(parsed.text || ''));
       else if (eventLine === 'done') handlers.onDone?.(parsed);
       else if (eventLine === 'error') handlers.onError(String(parsed.error || 'Stream error'));

@@ -22,7 +22,9 @@ The benchmark suite uses a small set of task-specific evaluators. It is useful f
 
 The development subprocess runner is not an OS security boundary. In production, dynamic code execution is disabled unless Docker isolation is explicitly selected and a Docker daemon is actually available. If the Docker sandbox is requested but unavailable, Neo refuses execution instead of falling back to a normal subprocess.
 
-The planner uses a local reasoning model only when an active model is confirmed in a healthy configured runtime. Model-generated plans are constrained to registered tools, granted scopes, risk levels, and validated input schemas. When no usable model is available, Neo falls back to a deterministic bounded plan.\n\nSelf-evolution features do not imply unrestricted autonomous production changes. Model activation requires runtime verification; proposals and code changes should remain subject to review, tests, and rollback controls. Configuration experiments are marked inconclusive until the candidate settings are actually applied. Code proposals are tested as standalone candidate modules in a temporary workspace; they are not full-repository integration tests or Git merges. Dataset preparation does not start model training or produce adapter weights.
+The planner uses a local reasoning model only when an active model is confirmed in a healthy configured runtime. Model-generated plans are constrained to registered tools, granted scopes, risk levels, and validated input schemas. When no usable model is available, Neo falls back to a deterministic bounded plan.
+
+Self-evolution features do not imply unrestricted autonomous production changes. Model activation requires runtime verification; proposals and code changes should remain subject to review, tests, and rollback controls. Configuration experiments are marked inconclusive until the candidate settings are actually applied. Code proposals are tested as standalone candidate modules in a temporary workspace; they are not full-repository integration tests or Git merges. Dataset preparation does not start model training or produce adapter weights.
 
 ## Quickstart — local development
 
@@ -46,7 +48,7 @@ Set `NODE_ENV=production` and configure `NEO_SESSION_SECRET` with at least 32 by
 openssl rand -hex 32
 ```
 
-Also configure the database credentials, trusted proxy hop count, CORS origins, and model runtime endpoint for the deployment. Production startup fails when the session secret is missing or too short.
+Also configure the database credentials, trusted proxy hop count, CORS origins, and model runtime endpoint for the deployment. Docker Compose fails fast if `NEO_SESSION_SECRET` is missing; standalone Node execution logs a security warning and generates an ephemeral 256-bit secret when omitted.
 
 The default production Compose setup does not expose PostgreSQL or Redis to the public network; their published ports bind to host loopback. PostgreSQL and Redis both require credentials. Set `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `NEO_SESSION_SECRET` in the Compose `.env` file.
 

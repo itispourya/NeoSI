@@ -14,6 +14,7 @@ export function ToolsForgeView({ data, onRefresh }: ToolsForgeViewProps) {
 
   const [requirement, setRequirement] = useState('Compute VAT invoice total from amount, taxRate, and discountPct');
   const [forgeOut, setForgeOut] = useState<string | null>(null);
+  const [openApiSpec, setOpenApiSpec] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const executeTool = async (e: React.FormEvent) => {
@@ -54,11 +55,34 @@ export function ToolsForgeView({ data, onRefresh }: ToolsForgeViewProps) {
   };
 
   const toggleEndpoint = async (slug: string, enabled: boolean) => {
-    await apiFetch(`/api/v1/forge/${slug}/toggle`, {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled }),
-    });
-    await onRefresh();
+    setBusy(true);
+    try {
+      await apiFetch(`/api/v1/forge/${slug}/toggle`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled }),
+      });
+      await onRefresh();
+    } catch (err) {
+      setForgeOut(err instanceof Error ? err.message : 'Failed to toggle endpoint');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inspectOpenApi = async () => {
+    if (openApiSpec) {
+      setOpenApiSpec(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      const spec = await apiFetch<Record<string, unknown>>('/api/v1/openapi.json');
+      setOpenApiSpec(JSON.stringify(spec, null, 2));
+    } catch (err) {
+      setForgeOut(err instanceof Error ? err.message : 'Failed to load OpenAPI spec');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -104,14 +128,14 @@ export function ToolsForgeView({ data, onRefresh }: ToolsForgeViewProps) {
         <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">
           <div className="flex items-center justify-between gap-2">
             <h2 className="font-display text-sm font-semibold text-slate-100">Autonomous API Forge (OpenAPI 3.1)</h2>
-            <a
-              href="/api/v1/openapi.json"
-              target="_blank"
-              rel="noreferrer"
+            <button
+              type="button"
+              onClick={() => void inspectOpenApi()}
+              disabled={busy}
               className="text-xs font-mono text-blue-400 hover:text-blue-300 whitespace-nowrap"
             >
-              /api/v1/openapi.json
-            </a>
+              {openApiSpec ? 'Hide OpenAPI 3.1' : 'Inspect OpenAPI 3.1'}
+            </button>
           </div>
           <form onSubmit={createForgedApi} className="space-y-3">
             <textarea
@@ -133,6 +157,11 @@ export function ToolsForgeView({ data, onRefresh }: ToolsForgeViewProps) {
           {forgeOut && (
             <pre className="p-3 bg-[#0B0F17] border border-slate-800 rounded text-[11px] font-mono text-slate-200 whitespace-pre-wrap max-h-48 overflow-y-auto">
               {forgeOut}
+            </pre>
+          )}
+          {openApiSpec && (
+            <pre className="p-3 bg-[#0B0F17] border border-slate-800 rounded text-[11px] font-mono text-slate-300 whitespace-pre-wrap max-h-64 overflow-y-auto">
+              {openApiSpec}
             </pre>
           )}
         </div>

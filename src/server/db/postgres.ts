@@ -47,7 +47,7 @@ import type {
 import { seedInitialData } from './seed.ts';
 import { computeBm25Scores, computeTemporalDecay, hybridRerank, tokenizeMultilingual } from './vector.ts';
 
-function toPgVectorLiteral(vector: number[]): string | null {
+export function toPgVectorLiteral(vector: number[]): string | null {
   if (!Array.isArray(vector) || vector.length === 0) return null;
   if (vector.length > 16_000 || vector.some((value) => !Number.isFinite(value))) {
     throw new Error('Embedding must contain 1–16000 finite numeric dimensions.');
@@ -619,7 +619,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
       input.name,
       input.entity_type,
     ]);
-    const vecLiteral = input.embedding.length ? `[${input.embedding.join(',')}]` : null;
+    const vecLiteral = toPgVectorLiteral(input.embedding);
     const embModel = input.embedding_model || 'neo-embed-local-v2';
     const embDim = input.embedding_dim ?? input.embedding.length;
     if (existing.rows[0]) {

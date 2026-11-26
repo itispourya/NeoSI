@@ -4,6 +4,7 @@ import {
   buildPostgresLexicalFilter,
   buildPostgresMemoryFilters,
   buildPostgresUpdateTaskIfStatusQuery,
+  toPgVectorLiteral,
 } from './postgres.ts';
 
 test('PostgreSQL memory filters bind tenant and valid-time parameters', () => {
@@ -68,4 +69,11 @@ test('PostgreSQL updateTaskIfStatus emits valid $N positional placeholders', () 
     'UPDATE tasks SET status = $1, error = $2, result = $3, updated_at = NOW() WHERE id = $4 AND tenant_id = $5 AND status = ANY($6::text[]) RETURNING *'
   );
   assert.deepEqual(query.values, ['completed', null, JSON.stringify({ answer: 'done' }), 'task-1', 'tenant-1', ['planning', 'running']]);
+});
+
+test('toPgVectorLiteral formats valid vectors and rejects non-finite or empty vectors', () => {
+  assert.equal(toPgVectorLiteral([0.1, -2.5, 3]), '[0.1,-2.5,3]');
+  assert.equal(toPgVectorLiteral([]), null);
+  assert.throws(() => toPgVectorLiteral([0.1, Number.NaN]), /finite numeric dimensions/);
+  assert.throws(() => toPgVectorLiteral([Number.POSITIVE_INFINITY]), /finite numeric dimensions/);
 });

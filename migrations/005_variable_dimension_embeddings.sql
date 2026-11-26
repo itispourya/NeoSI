@@ -4,3 +4,7 @@ ALTER TABLE memories
   ALTER COLUMN embedding TYPE vector
   USING embedding::vector;
 
+ALTER TABLE entities
+  ALTER COLUMN embedding TYPE vector
+  USING embedding::vector;
+

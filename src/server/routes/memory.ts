@@ -7,6 +7,7 @@ import { runMemoryConsolidation } from '../knowledge/consolidation.ts';
 import { knowledgeGraph } from '../knowledge/graph.ts';
 import { reindexMemoriesForTenant, storeMemory } from '../knowledge/memory.ts';
 import { requireApiGatewayAuth } from '../security/auth.ts';
+import { asyncHandler } from '../security/headers.ts';
 
 export const memoryRouter = Router();
 
@@ -26,7 +27,7 @@ const createMemorySchema = z.object({
   validTo: z.string().nullable().optional(),
 });
 
-memoryRouter.post('/memory', requireApiGatewayAuth('write'), async (req, res) => {
+memoryRouter.post('/memory', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = createMemorySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid memory payload', issues: parsed.error.issues });
 
@@ -35,9 +36,9 @@ memoryRouter.post('/memory', requireApiGatewayAuth('write'), async (req, res) =>
     ...parsed.data,
   });
   return res.status(201).json({ memory: { ...mem, embedding: undefined } });
-});
+}));
 
-memoryRouter.get('/memory/search', requireApiGatewayAuth('read'), async (req, res) => {
+memoryRouter.get('/memory/search', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const q = String(req.query.q || req.query.query || '').trim();
   const memoryTypeRaw = typeof req.query.type === 'string' ? req.query.type : undefined;
   const limit = Math.min(50, Math.max(1, Number(req.query.limit || 15)));
@@ -71,31 +72,31 @@ memoryRouter.get('/memory/search', requireApiGatewayAuth('read'), async (req, re
     query: q,
     matches: matches.map((m) => ({ ...m, embedding: undefined })),
   });
-});
+}));
 
-memoryRouter.post('/memory/consolidate', requireApiGatewayAuth('write'), async (req, res) => {
+memoryRouter.post('/memory/consolidate', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const summary = await runMemoryConsolidation(req.neoAuth!.tenant.id);
   res.json(summary);
-});
+}));
 
 const reindexSchema = z.object({
   force: z.boolean().optional(),
   limit: z.number().int().min(1).max(2000).optional(),
 });
 
-memoryRouter.post('/memory/reindex', requireApiGatewayAuth('write'), async (req, res) => {
+memoryRouter.post('/memory/reindex', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = reindexSchema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: 'Invalid reindex parameters', issues: parsed.error.issues });
   const summary = await reindexMemoriesForTenant(req.neoAuth!.tenant.id, parsed.data);
   return res.json(summary);
-});
+}));
 
-memoryRouter.get('/memory/:id', requireApiGatewayAuth('read'), async (req, res) => {
+memoryRouter.get('/memory/:id', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const mem = await db.getMemoryById(String(req.params.id), req.neoAuth!.tenant.id, true);
   if (!mem) return res.status(404).json({ error: 'Memory not found' });
   return res.json({ memory: { ...mem, embedding: undefined } });
-});
+}));
 
 const patchMemorySchema = z.object({
   title: z.string().min(2).max(200).optional(),
@@ -106,7 +107,7 @@ const patchMemorySchema = z.object({
   valid_to: z.string().nullable().optional(),
 });
 
-memoryRouter.patch('/memory/:id', requireApiGatewayAuth('write'), async (req, res) => {
+memoryRouter.patch('/memory/:id', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = patchMemorySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid memory update', issues: parsed.error.issues });
 
@@ -124,15 +125,15 @@ memoryRouter.patch('/memory/:id', requireApiGatewayAuth('write'), async (req, re
   const updated = await db.updateMemory(String(req.params.id), req.neoAuth!.tenant.id, patch);
   if (!updated) return res.status(404).json({ error: 'Memory not found' });
   return res.json({ memory: { ...updated, embedding: undefined } });
-});
+}));
 
-memoryRouter.delete('/memory/:id', requireApiGatewayAuth('write'), async (req, res) => {
+memoryRouter.delete('/memory/:id', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const hard = req.query.hard === 'true';
   const ok = await db.deleteMemory(String(req.params.id), req.neoAuth!.tenant.id, hard);
   if (!ok) return res.status(404).json({ error: 'Memory not found' });
   return res.json({ deleted: true, hard });
-});
+}));
 
 // Knowledge Graph endpoints (strictly tenant-isolated)
 const entitySchema = z.object({
@@ -143,7 +144,7 @@ const entitySchema = z.object({
   confidence: z.number().min(0).max(1).optional(),
 });
 
-memoryRouter.post('/graph/entities', requireApiGatewayAuth('write'), async (req, res) => {
+memoryRouter.post('/graph/entities', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = entitySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid entity payload', issues: parsed.error.issues });
   const entity = await knowledgeGraph.upsertEntity({
@@ -151,9 +152,9 @@ memoryRouter.post('/graph/entities', requireApiGatewayAuth('write'), async (req,
     ...parsed.data,
   });
   return res.status(201).json({ entity: { ...entity, embedding: undefined } });
-});
+}));
 
-memoryRouter.get('/graph/entities', requireApiGatewayAuth('read'), async (req, res) => {
+memoryRouter.get('/graph/entities', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const q = typeof req.query.q === 'string' ? req.query.q : undefined;
   const entityType = typeof req.query.type === 'string' ? req.query.type : undefined;
@@ -165,7 +166,7 @@ memoryRouter.get('/graph/entities', requireApiGatewayAuth('read'), async (req, r
     entities: entities.map((e) => ({ ...e, embedding: undefined })),
     relationships,
   });
-});
+}));
 
 const relationshipSchema = z.object({
   sourceEntityId: z.string().min(1),
@@ -176,7 +177,7 @@ const relationshipSchema = z.object({
   confidence: z.number().min(0).max(1).optional(),
 });
 
-memoryRouter.post('/graph/relationships', requireApiGatewayAuth('write'), async (req, res) => {
+memoryRouter.post('/graph/relationships', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = relationshipSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid relationship payload', issues: parsed.error.issues });
   try {
@@ -188,10 +189,10 @@ memoryRouter.post('/graph/relationships', requireApiGatewayAuth('write'), async 
   } catch (err) {
     return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
-});
+}));
 
-memoryRouter.get('/graph/traverse/:entityId', requireApiGatewayAuth('read'), async (req, res) => {
+memoryRouter.get('/graph/traverse/:entityId', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const depth = Math.min(3, Math.max(1, Number(req.query.depth || 2)));
   const graph = await knowledgeGraph.traverse(req.neoAuth!.tenant.id, String(req.params.entityId), depth);
   return res.json(graph);
-});
+}));

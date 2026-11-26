@@ -9,6 +9,15 @@ interface MemoryGraphViewProps {
 
 const LAYERS: MemoryLayerType[] = ['semantic', 'procedural', 'episodic', 'working', 'personal', 'organizational', 'temporal'];
 
+function safeCitationUrl(raw: string): string | null {
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLayer, setSelectedLayer] = useState<string>('all');
@@ -27,11 +36,14 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
   const runSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
+    setStatusMsg(null);
     try {
       const params = new URLSearchParams({ q: searchQuery, limit: '20' });
       if (selectedLayer !== 'all') params.set('type', selectedLayer);
       const res = await apiFetch<{ matches: MemoryInfo[] }>(`/api/v1/memory/search?${params.toString()}`);
       setSearchResults(res.matches);
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Memory search failed');
     } finally {
       setBusy(false);
     }
@@ -59,6 +71,7 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
 
   const consolidate = async () => {
     setBusy(true);
+    setStatusMsg(null);
     try {
       const res = await apiFetch<{ consolidatedSemantic: number; prunedExpiredWorking: number; contradictionsDetected: number }>(
         '/api/v1/memory/consolidate',
@@ -68,6 +81,8 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
         `Consolidated ${res.consolidatedSemantic} semantic pattern(s), pruned ${res.prunedExpiredWorking} stale working item(s), flagged ${res.contradictionsDetected} contradiction(s).`
       );
       await onRefresh();
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Memory consolidation failed');
     } finally {
       setBusy(false);
     }
@@ -94,10 +109,13 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
 
   const deleteMemoryItem = async (id: string) => {
     setBusy(true);
+    setStatusMsg(null);
     try {
       await apiFetch(`/api/v1/memory/${id}`, { method: 'DELETE' });
       setSearchResults((prev) => (prev ? prev.filter((item) => item.id !== id) : null));
       await onRefresh();
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Delete failed');
     } finally {
       setBusy(false);
     }
@@ -124,6 +142,7 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
 
   const evaluateSkill = async (id: string) => {
     setBusy(true);
+    setStatusMsg(null);
     try {
       const res = await apiFetch<{ score: number; passed: boolean }>(`/api/v1/skills/${id}/evaluate`, {
         method: 'POST',
@@ -131,6 +150,8 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
       });
       setStatusMsg(`Skill evaluated: score ${res.score}% (${res.passed ? 'passed' : 'needs review'})`);
       await onRefresh();
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Skill evaluation failed');
     } finally {
       setBusy(false);
     }
@@ -309,6 +330,24 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
                   </span>
                 </div>
                 <p className="text-slate-400 line-clamp-2">{r.summary}</p>
+                {r.citations.length > 0 && (
+                  <div className="flex flex-wrap gap-2 pt-0.5">
+                    {r.citations.slice(0, 3).map((cit, idx) => {
+                      const href = safeCitationUrl(cit.url);
+                      return href ? (
+                        <a
+                          key={idx}
+                          href={href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] font-mono text-blue-400 hover:text-blue-300 truncate max-w-[200px]"
+                        >
+                          [{idx + 1}] {cit.title || href}
+                        </a>
+                      ) : null;
+                    })}
+                  </div>
+                )}
               </div>
             ))}
           </div>

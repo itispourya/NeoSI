@@ -1,23 +1,24 @@
 import { Router } from 'express';
 import { getDb } from '../db/adapter.ts';
 import { requireApiGatewayAuth } from '../security/auth.ts';
+import { asyncHandler } from '../security/headers.ts';
 import { toolRegistry } from '../tools/registry.ts';
 
 export const toolsRouter = Router();
 
-toolsRouter.get('/tools', requireApiGatewayAuth('read'), async (_req, res) => {
+toolsRouter.get('/tools', requireApiGatewayAuth('read'), asyncHandler(async (_req, res) => {
   const db = await getDb();
   const dbRows = await db.listTools();
   res.json({ tools: toolRegistry.toPublicRecords(dbRows) });
-});
+}));
 
-toolsRouter.get('/tools/executions', requireApiGatewayAuth('read'), async (req, res) => {
+toolsRouter.get('/tools/executions', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const executions = await db.listToolExecutions(req.neoAuth!.tenant.id, 60);
   res.json({ executions });
-});
+}));
 
-toolsRouter.post('/tools/:id/execute', requireApiGatewayAuth('write'), async (req, res) => {
+toolsRouter.post('/tools/:id/execute', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const toolId = String(req.params.id);
   const result = await toolRegistry.executeTool(toolId, req.body?.input ?? req.body ?? {}, {
     tenantId: req.neoAuth!.tenant.id,
@@ -30,12 +31,12 @@ toolsRouter.post('/tools/:id/execute', requireApiGatewayAuth('write'), async (re
     return res.status(400).json({ ok: false, error: result.error, durationMs: result.durationMs });
   }
   return res.json(result);
-});
+}));
 
 /**
  * MCP (Model Context Protocol) JSON-RPC endpoint
  */
-toolsRouter.post('/mcp', requireApiGatewayAuth('read'), async (req, res) => {
+toolsRouter.post('/mcp', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const { id = null, method, params } = (req.body || {}) as {
     id?: string | number | null;
     method?: string;
@@ -63,4 +64,4 @@ toolsRouter.post('/mcp', requireApiGatewayAuth('read'), async (req, res) => {
     id,
     error: { code: -32601, message: `Unsupported MCP method '${method || ''}'` },
   });
-});
+}));

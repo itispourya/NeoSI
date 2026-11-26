@@ -127,105 +127,113 @@ function extractBearerOrKey(req: Request): string | null {
  * Callers must first claim/login via /api/admin/auth/claim or /api/admin/auth/login to receive a signed neo_adm_ token.
  */
 export async function requireAdminConsoleAuth(req: Request, res: Response, next: NextFunction) {
-  const lockState = await getAdminLockState();
-  const token = extractBearerOrKey(req);
+  try {
+    const lockState = await getAdminLockState();
+    const token = extractBearerOrKey(req);
 
-  if (!token || !verifyAdminToken(token)) {
-    return res.status(401).json({
-      error: lockState.locked
-        ? 'Admin authentication required'
-        : 'Initial admin setup required. Claim admin passcode first.',
-      authRequired: true,
-      lockState,
-    });
+    if (!token || !verifyAdminToken(token)) {
+      return res.status(401).json({
+        error: lockState.locked
+          ? 'Admin authentication required'
+          : 'Initial admin setup required. Claim admin passcode first.',
+        authRequired: true,
+        lockState,
+      });
+    }
+
+    const db = await getDb();
+    const tenants = await db.listTenants();
+    const requestedTenant = req.header('x-neo-workspace');
+    const activeTenant = requestedTenant ? await db.getTenantById(requestedTenant) : tenants[0];
+    if (requestedTenant && !activeTenant) return res.status(403).json({ error: 'Requested workspace is not available to this administrator.' });
+    if (!activeTenant) return res.status(503).json({ error: 'No workspace is configured.' });
+
+    const limit = checkRateLimit(`admin:${activeTenant.id}`, activeTenant.rate_limit_rpm);
+    res.setHeader('X-RateLimit-Limit', String(limit.limit));
+    res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
+    res.setHeader('X-RateLimit-Reset', String(Math.ceil((Date.now() + limit.resetMs) / 1000)));
+    if (!limit.allowed) return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
+
+    req.neoAuth = {
+      actorType: 'admin',
+      actorLabel: 'admin-session',
+      tenant: activeTenant,
+      scopes: ['read', 'write', 'forge', 'admin'],
+    };
+    return next();
+  } catch (err) {
+    return next(err);
   }
-
-  const db = await getDb();
-  const tenants = await db.listTenants();
-  const requestedTenant = req.header('x-neo-workspace');
-  const activeTenant = requestedTenant ? await db.getTenantById(requestedTenant) : tenants[0];
-  if (requestedTenant && !activeTenant) return res.status(403).json({ error: 'Requested workspace is not available to this administrator.' });
-  if (!activeTenant) return res.status(503).json({ error: 'No workspace is configured.' });
-
-  const limit = checkRateLimit(`admin:${activeTenant.id}`, activeTenant.rate_limit_rpm);
-  res.setHeader('X-RateLimit-Limit', String(limit.limit));
-  res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
-  res.setHeader('X-RateLimit-Reset', String(Math.ceil((Date.now() + limit.resetMs) / 1000)));
-  if (!limit.allowed) return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
-
-  req.neoAuth = {
-    actorType: 'admin',
-    actorLabel: 'admin-session',
-    tenant: activeTenant,
-    scopes: ['read', 'write', 'forge', 'admin'],
-  };
-  return next();
 }
 
 export function requireApiGatewayAuth(requiredScope = 'read') {
   return async (req: Request, res: Response, next: NextFunction) => {
-    const rawCredential = extractBearerOrKey(req);
-    const db = await getDb();
+    try {
+      const rawCredential = extractBearerOrKey(req);
+      const db = await getDb();
 
-    // 1. Scoped neos_live_ API Key (with strict tenant binding & rate limits)
-    if (rawCredential && rawCredential.startsWith('neos_live_')) {
-      const keyHash = hashApiKey(rawCredential);
-      const apiKey = await db.getApiKeyByHash(keyHash);
-      if (!apiKey || apiKey.revoked_at) {
-        return res.status(401).json({ error: 'Invalid or revoked Neo API key' });
-      }
-      if (!apiKey.scopes.includes(requiredScope) && !apiKey.scopes.includes('admin')) {
-        return res.status(403).json({ error: `API key missing required scope: ${requiredScope}` });
-      }
-      const tenant = await db.getTenantById(apiKey.tenant_id);
-      if (!tenant) {
-        return res.status(401).json({ error: 'Workspace/tenant not found for API key' });
+      // 1. Scoped neos_live_ API Key (with strict tenant binding & rate limits)
+      if (rawCredential && rawCredential.startsWith('neos_live_')) {
+        const keyHash = hashApiKey(rawCredential);
+        const apiKey = await db.getApiKeyByHash(keyHash);
+        if (!apiKey || apiKey.revoked_at) {
+          return res.status(401).json({ error: 'Invalid or revoked Neo API key' });
+        }
+        if (!apiKey.scopes.includes(requiredScope) && !apiKey.scopes.includes('admin')) {
+          return res.status(403).json({ error: `API key missing required scope: ${requiredScope}` });
+        }
+        const tenant = await db.getTenantById(apiKey.tenant_id);
+        if (!tenant) {
+          return res.status(401).json({ error: 'Workspace/tenant not found for API key' });
+        }
+
+        const limit = checkRateLimit(`key:${apiKey.id}`, tenant.rate_limit_rpm);
+        res.setHeader('X-RateLimit-Limit', String(limit.limit));
+        res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
+        res.setHeader('X-RateLimit-Reset', String(Math.ceil((Date.now() + limit.resetMs) / 1000)));
+        if (!limit.allowed) {
+          return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
+        }
+
+        await db.touchApiKey(apiKey.id);
+        req.neoAuth = {
+          actorType: 'api_key',
+          actorLabel: apiKey.key_prefix,
+          tenant,
+          scopes: apiKey.scopes,
+        };
+        return next();
       }
 
-      const limit = checkRateLimit(`key:${apiKey.id}`, tenant.rate_limit_rpm);
-      res.setHeader('X-RateLimit-Limit', String(limit.limit));
-      res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
-      res.setHeader('X-RateLimit-Reset', String(Math.ceil((Date.now() + limit.resetMs) / 1000)));
-      if (!limit.allowed) {
-        return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
+      // 2. Signed Admin session Bearer token (optional workspace scoping via X-Neo-Workspace)
+      if (rawCredential && verifyAdminToken(rawCredential)) {
+        const tenants = await db.listTenants();
+        const requestedTenant = req.header('x-neo-workspace');
+        const activeTenant = requestedTenant ? await db.getTenantById(requestedTenant) : tenants[0];
+        if (requestedTenant && !activeTenant) return res.status(403).json({ error: 'Requested workspace is not available to this administrator.' });
+        if (!activeTenant) return res.status(503).json({ error: 'No workspace is configured.' });
+        const limit = checkRateLimit(`admin:${activeTenant.id}`, activeTenant.rate_limit_rpm);
+        res.setHeader('X-RateLimit-Limit', String(limit.limit));
+        res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
+        res.setHeader('X-RateLimit-Reset', String(Math.ceil((Date.now() + limit.resetMs) / 1000)));
+        if (!limit.allowed) {
+          return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
+        }
+        req.neoAuth = {
+          actorType: 'admin',
+          actorLabel: 'admin-session',
+          tenant: activeTenant,
+          scopes: ['read', 'write', 'forge', 'admin'],
+        };
+        return next();
       }
 
-      await db.touchApiKey(apiKey.id);
-      req.neoAuth = {
-        actorType: 'api_key',
-        actorLabel: apiKey.key_prefix,
-        tenant,
-        scopes: apiKey.scopes,
-      };
-      return next();
+      return res.status(401).json({
+        error: 'Authentication required. Provide Authorization: Bearer neos_live_... or signed admin session token.',
+        authRequired: true,
+      });
+    } catch (err) {
+      return next(err);
     }
-
-    // 2. Signed Admin session Bearer token (optional workspace scoping via X-Neo-Workspace)
-    if (rawCredential && verifyAdminToken(rawCredential)) {
-      const tenants = await db.listTenants();
-      const requestedTenant = req.header('x-neo-workspace');
-      const activeTenant = requestedTenant ? await db.getTenantById(requestedTenant) : tenants[0];
-      if (requestedTenant && !activeTenant) return res.status(403).json({ error: 'Requested workspace is not available to this administrator.' });
-      if (!activeTenant) return res.status(503).json({ error: 'No workspace is configured.' });
-      const limit = checkRateLimit(`admin:${activeTenant.id}`, activeTenant.rate_limit_rpm);
-      res.setHeader('X-RateLimit-Limit', String(limit.limit));
-      res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
-      res.setHeader('X-RateLimit-Reset', String(Math.ceil((Date.now() + limit.resetMs) / 1000)));
-      if (!limit.allowed) {
-        return res.status(429).json({ error: 'Rate limit exceeded', retryAfterMs: limit.resetMs });
-      }
-      req.neoAuth = {
-        actorType: 'admin',
-        actorLabel: 'admin-session',
-        tenant: activeTenant,
-        scopes: ['read', 'write', 'forge', 'admin'],
-      };
-      return next();
-    }
-
-    return res.status(401).json({
-      error: 'Authentication required. Provide Authorization: Bearer neos_live_... or signed admin session token.',
-      authRequired: true,
-    });
   };
 }

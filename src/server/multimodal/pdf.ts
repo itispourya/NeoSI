@@ -47,12 +47,12 @@ export function extractTextFromPdfBuffer(buf: Buffer): { text: string; pagesEsti
     if (endIdx === -1) break;
 
     const slice = buf.subarray(dataStart, endIdx);
-    // Attempt FlateDecode inflate, fallback to raw text stream
+    // Attempt FlateDecode inflate with bounded output, fallback to raw text stream
     let decodedStr: string;
     try {
-      decodedStr = zlib.inflateSync(slice).toString('latin1');
+      decodedStr = zlib.inflateSync(slice, { maxOutputLength: 4 * 1024 * 1024 }).toString('latin1');
     } catch {
-      decodedStr = slice.toString('latin1');
+      decodedStr = slice.length > 4 * 1024 * 1024 ? slice.subarray(0, 4 * 1024 * 1024).toString('latin1') : slice.toString('latin1');
     }
     collectTextOperators(decodedStr);
     searchPos = endIdx + endStreamToken.length;

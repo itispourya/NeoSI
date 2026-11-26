@@ -24,7 +24,11 @@ const PROTECTED_CORE_PATHS = [
 ];
 
 export function isProtectedPath(filePath: string): boolean {
-  const normalized = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const raw = filePath.replace(/\\/g, '/').trim();
+  if (!raw || raw.startsWith('/') || /^[a-zA-Z]:/.test(raw)) return true;
+  if (raw.split('/').some((seg) => seg === '..')) return true;
+  const normalized = path.posix.normalize(raw).replace(/^\.\/+/, '');
+  if (normalized.startsWith('..') || normalized === '.') return true;
   return PROTECTED_CORE_PATHS.some((prefix) => normalized === prefix || normalized.startsWith(prefix));
 }
 

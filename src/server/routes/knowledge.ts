@@ -12,6 +12,7 @@ import { extractTextFromPdfBuffer } from '../multimodal/pdf.ts';
 import { distillTextLocally } from '../neo/sovereignEngine.ts';
 import { fetchCleanUrlContent } from '../search/webSearch.ts';
 import { requireAdminConsoleAuth, requireApiGatewayAuth } from '../security/auth.ts';
+import { asyncHandler } from '../security/headers.ts';
 
 export const knowledgeRouter = Router();
 
@@ -20,7 +21,7 @@ const researchSchema = z.object({
   urls: z.array(z.string().url()).max(3).optional(),
 });
 
-knowledgeRouter.post('/research', requireApiGatewayAuth('write'), async (req, res) => {
+knowledgeRouter.post('/research', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = researchSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid research payload', issues: parsed.error.issues });
   try {
@@ -31,22 +32,23 @@ knowledgeRouter.post('/research', requireApiGatewayAuth('write'), async (req, re
     });
     return res.status(report.status === 'completed' ? 201 : 503).json({ report });
   } catch (err) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    console.error('[Neo Knowledge] /research failed:', err);
+    return res.status(500).json({ error: 'Research pipeline failed.' });
   }
-});
+}));
 
-knowledgeRouter.get('/research', requireApiGatewayAuth('read'), async (req, res) => {
+knowledgeRouter.get('/research', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const reports = await db.listResearchReports(req.neoAuth!.tenant.id, 30);
   res.json({ reports });
-});
+}));
 
-knowledgeRouter.get('/research/:id', requireApiGatewayAuth('read'), async (req, res) => {
+knowledgeRouter.get('/research/:id', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const report = await db.getResearchReportById(String(req.params.id), req.neoAuth!.tenant.id);
   if (!report) return res.status(404).json({ error: 'Research report not found' });
   return res.json({ report });
-});
+}));
 
 const ingestSchema = z.object({
   topic: z.string().min(2).max(160),
@@ -57,7 +59,7 @@ const ingestSchema = z.object({
   sourceType: z.enum(['document', 'url', 'pdf', 'note']).optional(),
 });
 
-knowledgeRouter.post('/knowledge/ingest', requireApiGatewayAuth('write'), async (req, res) => {
+knowledgeRouter.post('/knowledge/ingest', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = ingestSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid ingest payload', issues: parsed.error.issues });
 
@@ -106,7 +108,7 @@ knowledgeRouter.post('/knowledge/ingest', requireApiGatewayAuth('write'), async 
   } catch (err) {
     return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
-});
+}));
 
 const queryKnowledgeSchema = z.object({
   query: z.string().min(2).max(1000),
@@ -114,7 +116,7 @@ const queryKnowledgeSchema = z.object({
   limit: z.number().int().min(1).max(20).optional(),
 });
 
-knowledgeRouter.post('/knowledge/query', requireApiGatewayAuth('read'), async (req, res) => {
+knowledgeRouter.post('/knowledge/query', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const parsed = queryKnowledgeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid query payload', issues: parsed.error.issues });
 
@@ -130,9 +132,9 @@ knowledgeRouter.post('/knowledge/query', requireApiGatewayAuth('read'), async (r
     minScore: 0.01,
   });
   return res.json({ query: parsed.data.query, matches: matches.map((m) => ({ ...m, embedding: undefined })) });
-});
+}));
 
-knowledgeRouter.get('/knowledge/search', requireApiGatewayAuth('read'), async (req, res) => {
+knowledgeRouter.get('/knowledge/search', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q) return res.status(400).json({ error: 'Query parameter q is required' });
   const db = await getDb();
@@ -146,31 +148,32 @@ knowledgeRouter.get('/knowledge/search', requireApiGatewayAuth('read'), async (r
     minScore: 0.01,
   });
   return res.json({ query: q, matches: matches.map((m) => ({ ...m, embedding: undefined })) });
-});
+}));
 
-knowledgeRouter.post('/knowledge/learn', requireApiGatewayAuth('write'), async (req, res) => {
+knowledgeRouter.post('/knowledge/learn', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const topic = String(req.body?.topic || '').trim();
   if (topic.length < 3) return res.status(400).json({ error: 'Topic must be at least 3 characters' });
   try {
     const result = await knowledgeDaemon.triggerManualLearn(topic, typeof req.body?.streamId === 'string' ? req.body.streamId : undefined, req.neoAuth!.tenant.id);
     return res.json(result);
   } catch (err) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    console.error('[Neo Knowledge] /knowledge/learn failed:', err);
+    return res.status(500).json({ error: 'Topic learning cycle failed.' });
   }
-});
+}));
 
-knowledgeRouter.get('/knowledge/sources', requireApiGatewayAuth('read'), async (req, res) => {
+knowledgeRouter.get('/knowledge/sources', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const sources = await db.listKnowledgeSources(req.neoAuth!.tenant.id, 50);
   res.json({ sources });
-});
+}));
 
 // Skills Registry endpoints
-knowledgeRouter.get('/skills', requireApiGatewayAuth('read'), async (_req, res) => {
+knowledgeRouter.get('/skills', requireApiGatewayAuth('read'), asyncHandler(async (_req, res) => {
   const db = await getDb();
   const skills = await db.listSkills();
   res.json({ skills });
-});
+}));
 
 const skillCreateSchema = z.object({
   slug: z.string().min(2).max(80).regex(/^[a-z0-9-]+$/),
@@ -181,7 +184,7 @@ const skillCreateSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
-knowledgeRouter.post('/skills', requireAdminConsoleAuth, async (req, res) => {
+knowledgeRouter.post('/skills', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const parsed = skillCreateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid skill payload', issues: parsed.error.issues });
   const db = await getDb();
@@ -195,16 +198,16 @@ knowledgeRouter.post('/skills', requireAdminConsoleAuth, async (req, res) => {
     metadata: parsed.data.metadata || {},
   });
   return res.status(201).json({ skill });
-});
+}));
 
-knowledgeRouter.get('/skills/:id', requireApiGatewayAuth('read'), async (req, res) => {
+knowledgeRouter.get('/skills/:id', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const skill = await db.getSkillByIdOrSlug(String(req.params.id));
   if (!skill) return res.status(404).json({ error: 'Skill not found' });
   return res.json({ skill });
-});
+}));
 
-knowledgeRouter.patch('/skills/:id', requireAdminConsoleAuth, async (req, res) => {
+knowledgeRouter.patch('/skills/:id', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
   const updated = await db.updateSkillById(String(req.params.id), {
     title: typeof req.body?.title === 'string' ? req.body.title : undefined,
@@ -214,10 +217,10 @@ knowledgeRouter.patch('/skills/:id', requireAdminConsoleAuth, async (req, res) =
   });
   if (!updated) return res.status(404).json({ error: 'Skill not found' });
   return res.json({ skill: updated });
-});
+}));
 
-knowledgeRouter.post('/skills/:id/evaluate', requireAdminConsoleAuth, async (req, res) => {
+knowledgeRouter.post('/skills/:id/evaluate', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const result = await evaluateSkill(String(req.params.id));
   if (!result.skill) return res.status(404).json({ error: 'Skill not found' });
   return res.json(result);
-});
+}));

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { agentRuntime } from '../agent/runtime.ts';
 import { getDb } from '../db/adapter.ts';
 import { requireApiGatewayAuth } from '../security/auth.ts';
+import { asyncHandler } from '../security/headers.ts';
 
 export const tasksRouter = Router();
 
@@ -19,7 +20,7 @@ const createTaskSchema = z.object({
     .optional(),
 });
 
-tasksRouter.post('/tasks', requireApiGatewayAuth('write'), async (req, res) => {
+tasksRouter.post('/tasks', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = createTaskSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid task payload', issues: parsed.error.issues });
@@ -47,16 +48,16 @@ tasksRouter.post('/tasks', requireApiGatewayAuth('write'), async (req, res) => {
   });
 
   return res.status(201).json({ task });
-});
+}));
 
-tasksRouter.get('/tasks', requireApiGatewayAuth('read'), async (req, res) => {
+tasksRouter.get('/tasks', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const limit = Math.min(100, Number(req.query.limit || 30));
   const tasks = await db.listTasks(req.neoAuth!.tenant.id, { limit });
   res.json({ tasks });
-});
+}));
 
-tasksRouter.get('/tasks/:id', requireApiGatewayAuth('read'), async (req, res) => {
+tasksRouter.get('/tasks/:id', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const taskId = String(req.params.id);
   const tenantId = req.neoAuth!.tenant.id;
@@ -68,21 +69,21 @@ tasksRouter.get('/tasks/:id', requireApiGatewayAuth('read'), async (req, res) =>
     db.listTaskEvents(task.id, tenantId, 100),
   ]);
   return res.json({ task, steps, events });
-});
+}));
 
-tasksRouter.post('/tasks/:id/cancel', requireApiGatewayAuth('write'), async (req, res) => {
+tasksRouter.post('/tasks/:id/cancel', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const updated = await agentRuntime.cancelTask(String(req.params.id), req.neoAuth!.tenant.id);
   if (!updated) return res.status(404).json({ error: 'Task not found' });
   return res.json({ task: updated });
-});
+}));
 
-tasksRouter.post('/tasks/:id/resume', requireApiGatewayAuth('write'), async (req, res) => {
+tasksRouter.post('/tasks/:id/resume', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const updated = await agentRuntime.resumeTask(String(req.params.id), req.neoAuth!.tenant.id, req.neoAuth!.actorLabel, req.neoAuth!.scopes);
   if (!updated) return res.status(404).json({ error: 'Task not found' });
   return res.json({ task: updated });
-});
+}));
 
-tasksRouter.get('/tasks/:id/events', requireApiGatewayAuth('read'), async (req, res) => {
+tasksRouter.get('/tasks/:id/events', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const taskId = String(req.params.id);
   const tenantId = req.neoAuth!.tenant.id;
@@ -94,7 +95,9 @@ tasksRouter.get('/tasks/:id/events', requireApiGatewayAuth('read'), async (req, 
   res.setHeader('Connection', 'keep-alive');
 
   const send = (evtType: string, data: unknown) => {
-    res.write(`event: ${evtType}\ndata: ${JSON.stringify(data)}\n\n`);
+    if (!res.writableEnded) {
+      res.write(`event: ${evtType}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
   };
 
   const history = await db.listTaskEvents(task.id, tenantId, 100);
@@ -108,26 +111,27 @@ tasksRouter.get('/tasks/:id/events', requireApiGatewayAuth('read'), async (req, 
   }
 
   const unsubscribe = agentRuntime.subscribeTaskEvents(task.id, (evt) => {
+    if (res.writableEnded) return;
     send('task_event', evt);
     if (evt.event_type === 'task.completed' || evt.event_type === 'task.partial' || evt.event_type === 'task.failed' || evt.event_type === 'task.cancelled') {
       send('task_done', { eventType: evt.event_type, payload: evt.payload });
       unsubscribe();
       clearTimeout(safetyTimer);
-      res.end();
+      if (!res.writableEnded) res.end();
     }
   });
 
   const safetyTimer = setTimeout(() => {
     unsubscribe();
     send('task_timeout', { message: 'SSE stream window closed' });
-    res.end();
+    if (!res.writableEnded) res.end();
   }, 45_000);
 
   req.on('close', () => {
     clearTimeout(safetyTimer);
     unsubscribe();
   });
-});
+}));
 
 const createObjectiveSchema = z.object({
   title: z.string().min(3).max(200),
@@ -141,14 +145,14 @@ const createObjectiveSchema = z.object({
   compute_budget_ms: z.number().int().min(1000).max(600_000).default(30_000),
 });
 
-tasksRouter.get('/objectives', requireApiGatewayAuth('read'), async (req, res) => {
+tasksRouter.get('/objectives', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const limit = Math.min(100, Number(req.query.limit || 30));
   const objectives = await db.listObjectives(req.neoAuth!.tenant.id, { limit });
   return res.json({ objectives });
-});
+}));
 
-tasksRouter.post('/objectives', requireApiGatewayAuth('write'), async (req, res) => {
+tasksRouter.post('/objectives', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = createObjectiveSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid objective payload', issues: parsed.error.issues });
@@ -174,7 +178,7 @@ tasksRouter.post('/objectives', requireApiGatewayAuth('write'), async (req, res)
     last_evaluated_at: new Date().toISOString(),
   });
   return res.status(201).json({ objective });
-});
+}));
 
 const patchObjectiveSchema = z.object({
   status: z.enum(['active', 'paused', 'achieved', 'abandoned', 'blocked']).optional(),
@@ -184,7 +188,7 @@ const patchObjectiveSchema = z.object({
   description: z.string().min(3).max(4000).optional(),
 });
 
-tasksRouter.patch('/objectives/:id', requireApiGatewayAuth('write'), async (req, res) => {
+tasksRouter.patch('/objectives/:id', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const parsed = patchObjectiveSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid objective update', issues: parsed.error.issues });
@@ -196,4 +200,4 @@ tasksRouter.patch('/objectives/:id', requireApiGatewayAuth('write'), async (req,
   });
   if (!updated) return res.status(404).json({ error: 'Objective not found' });
   return res.json({ objective: updated });
-});
+}));

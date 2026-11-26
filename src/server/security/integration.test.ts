@@ -17,6 +17,8 @@ import { modelsRouter } from '../routes/models.ts';
 import { systemRouter } from '../routes/system.ts';
 import { tasksRouter } from '../routes/tasks.ts';
 import { toolsRouter } from '../routes/tools.ts';
+import { extractTextFromPdfBuffer } from '../multimodal/pdf.ts';
+import { executePromotedModule } from '../neo/sovereignEngine.ts';
 import { executeHandlerInSandbox } from '../sandbox/runner.ts';
 import { generateScopedApiKey, validateExternalUrlAsync } from './crypto.ts';
 import { securityHeadersAndTracingMiddleware, structuredErrorHandler } from './headers.ts';
@@ -187,4 +189,36 @@ test('OS Subprocess sandbox executes with empty env ({}) and never leaks host se
   assert.equal(clean.ok, true);
   assert.equal(clean.output?.ok, true);
   assert.equal(clean.isolation, 'subprocess');
+});
+
+test('Promoted module path traversal, PDF decompression limits, and authenticated OpenAPI spec work safely', async () => {
+  const traversal = executePromotedModule('../secret', {});
+  assert.equal(traversal.ok, false);
+
+  const pdfEmpty = extractTextFromPdfBuffer(Buffer.from('not-a-pdf'));
+  assert.equal(pdfEmpty.ok, false);
+  assert.equal(pdfEmpty.pagesEstimated, 0);
+  assert.equal(pdfEmpty.text, '');
+
+  const unauthSpec = await fetch(`${baseUrl}/api/v1/openapi.json`);
+  assert.equal(unauthSpec.status, 401);
+
+  const loginRes = await fetch(`${baseUrl}/api/admin/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ passcode: 'neo-test-passcode-123' }),
+  });
+  assert.equal(loginRes.status, 200);
+  const { token } = (await loginRes.json()) as { token: string };
+
+  const specRes = await fetch(`${baseUrl}/api/v1/openapi.json`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(specRes.status, 200);
+  const spec = (await specRes.json()) as { openapi: string; paths: Record<string, unknown> };
+  assert.equal(spec.openapi, '3.1.0');
+  assert.ok(spec.paths['/api/v1/ready']);
+  assert.ok(spec.paths['/api/v1/objectives']);
+  assert.ok(spec.paths['/api/v1/memory/reindex']);
+  assert.ok(spec.paths['/api/v1/models/{id}/verify']);
 });

@@ -56,21 +56,32 @@ export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
       });
       setMsg(`Dataset prepared: ${res.job.dataset_size} privacy-filtered JSONL samples. No model training was started and no adapter weights were produced.`);
       await onRefresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Dataset preparation failed');
     } finally {
       setBusy(false);
     }
   };
 
   const toggleScheduledJob = async (id: string, enabled: boolean) => {
-    await apiFetch(`/api/admin/scheduler/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled }),
-    });
-    await onRefresh();
+    setBusy(true);
+    setMsg(null);
+    try {
+      await apiFetch(`/api/admin/scheduler/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled }),
+      });
+      await onRefresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Scheduler toggle failed');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const runSchedulerTick = async () => {
     setBusy(true);
+    setMsg(null);
     try {
       const res = await apiFetch<{ ran: string[]; skippedBusy: boolean }>('/api/admin/scheduler/tick', {
         method: 'POST',
@@ -78,6 +89,8 @@ export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
       });
       setMsg(res.skippedBusy ? 'Scheduler deferred: active user tasks have priority.' : `Scheduler tick ran: ${res.ran.join(', ') || 'no due jobs'}`);
       await onRefresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Scheduler tick failed');
     } finally {
       setBusy(false);
     }

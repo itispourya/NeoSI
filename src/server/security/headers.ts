@@ -43,7 +43,7 @@ export function securityHeadersAndTracingMiddleware(req: Request, res: Response,
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
       res.setHeader(
         'Access-Control-Allow-Headers',
-        'Authorization, Content-Type, X-API-Key, X-Request-Id, X-Correlation-Id, Idempotency-Key'
+        'Authorization, Content-Type, X-API-Key, X-Neo-Workspace, X-Request-Id, X-Correlation-Id, Idempotency-Key'
       );
       res.setHeader('Access-Control-Expose-Headers', 'X-Request-Id, X-Correlation-Id, X-RateLimit-Remaining, X-RateLimit-Limit, X-RateLimit-Reset');
     } else if (req.method === 'OPTIONS') {
@@ -58,6 +58,14 @@ export function securityHeadersAndTracingMiddleware(req: Request, res: Response,
   }
 
   next();
+}
+
+export function asyncHandler(
+  fn: (req: Request, res: Response, next: NextFunction) => unknown | Promise<unknown>
+) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
 }
 
 export function structuredErrorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {

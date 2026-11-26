@@ -3,20 +3,21 @@ import { z } from 'zod';
 import { getDb } from '../db/adapter.ts';
 import { forgeDynamicEndpoint, invokeDynamicEndpoint } from '../forge/generator.ts';
 import { checkRateLimit, requireAdminConsoleAuth, requireApiGatewayAuth } from '../security/auth.ts';
+import { asyncHandler } from '../security/headers.ts';
 
 export const forgeRouter = Router();
 
-forgeRouter.get('/forge/endpoints', requireAdminConsoleAuth, async (req, res) => {
+forgeRouter.get('/forge/endpoints', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
   const endpoints = await db.listDynamicApis(req.neoAuth!.tenant.id);
   res.json({ endpoints });
-});
+}));
 
 const forgeCreateSchema = z.object({
   requirement: z.string().min(8).max(4000),
 });
 
-forgeRouter.post('/forge/create', requireApiGatewayAuth('forge'), async (req, res) => {
+forgeRouter.post('/forge/create', requireApiGatewayAuth('forge'), asyncHandler(async (req, res) => {
   const parsed = forgeCreateSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid forge requirement', issues: parsed.error.issues });
@@ -37,25 +38,28 @@ forgeRouter.post('/forge/create', requireApiGatewayAuth('forge'), async (req, re
   } catch (err) {
     return res.status(422).json({ error: err instanceof Error ? err.message : String(err) });
   }
-});
+}));
 
-forgeRouter.patch('/forge/:slug/toggle', requireApiGatewayAuth('forge'), async (req, res) => {
+forgeRouter.patch('/forge/:slug/toggle', requireApiGatewayAuth('forge'), asyncHandler(async (req, res) => {
   const db = await getDb();
   const enabled = Boolean(req.body?.enabled);
   const updated = await db.toggleDynamicApi(String(req.params.slug), enabled, req.neoAuth!.tenant.id);
   if (!updated) return res.status(404).json({ error: 'Dynamic endpoint not found' });
   return res.json({ endpoint: updated });
-});
+}));
 
-forgeRouter.get('/openapi.json', requireAdminConsoleAuth, async (_req, res) => {
+forgeRouter.get('/openapi.json', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
-  const dynamicApis = await db.listDynamicApis();
+  const dynamicApis = await db.listDynamicApis(req.neoAuth!.tenant.id);
 
   const paths: Record<string, unknown> = {
-    '/api/v1/health': { get: { summary: 'System health probe', tags: ['System'] } },
+    '/api/v1/health': { get: { summary: 'System liveness probe', tags: ['System'] } },
+    '/api/v1/ready': { get: { summary: 'Database and storage readiness probe', tags: ['System'] } },
     '/api/v1/status': { get: { summary: 'Subsystem, hardware, and runtime health status', tags: ['System'] } },
     '/api/v1/capabilities': { get: { summary: 'Honest multimodal & runtime capability matrix', tags: ['System'] } },
     '/api/v1/metrics': { get: { summary: 'Telemetry, tasks, tools, and memory breakdown metrics', tags: ['System'] } },
+    '/api/v1/conversations': { get: { summary: 'List tenant conversations', tags: ['Core'] } },
+    '/api/v1/conversations/{id}/messages': { get: { summary: 'List conversation messages', tags: ['Core'] } },
     '/api/v1/chat': { post: { summary: 'Turn-based stateful cognitive chat with conversation persistence', tags: ['Core'] } },
     '/api/v1/chat/stream': { post: { summary: 'Multilingual context-aware SSE streaming chat', tags: ['Core'] } },
     '/api/v1/reason': { post: { summary: '13-stage structured reasoning with independent critic verification', tags: ['Cognitive'] } },
@@ -67,19 +71,36 @@ forgeRouter.get('/openapi.json', requireAdminConsoleAuth, async (_req, res) => {
     },
     '/api/v1/tasks/{id}': { get: { summary: 'Get task state, DAG steps, and checkpoints', tags: ['Agent Runtime'] } },
     '/api/v1/tasks/{id}/cancel': { post: { summary: 'Cancel running autonomous task', tags: ['Agent Runtime'] } },
+    '/api/v1/tasks/{id}/resume': { post: { summary: 'Resume failed or partial autonomous task from checkpoint', tags: ['Agent Runtime'] } },
     '/api/v1/tasks/{id}/events': { get: { summary: 'Subscribe to live SSE task execution events', tags: ['Agent Runtime'] } },
+    '/api/v1/objectives': {
+      get: { summary: 'List long-horizon autonomous objectives', tags: ['Objectives'] },
+      post: { summary: 'Create a long-horizon autonomous objective', tags: ['Objectives'] },
+    },
+    '/api/v1/objectives/{id}': { patch: { summary: 'Update objective status, progress, or priority', tags: ['Objectives'] } },
     '/api/v1/memory': { post: { summary: 'Store working/episodic/semantic/procedural/personal/org/temporal memory', tags: ['Memory'] } },
     '/api/v1/memory/search': { get: { summary: 'Hybrid BM25 + vector + temporal decay memory retrieval', tags: ['Memory'] } },
     '/api/v1/memory/consolidate': { post: { summary: 'Consolidate episodic/working memory and detect contradictions', tags: ['Memory'] } },
+    '/api/v1/memory/reindex': { post: { summary: 'Re-index mismatched embeddings to the active embedding model', tags: ['Memory'] } },
+    '/api/v1/memory/{id}': {
+      get: { summary: 'Retrieve memory item by ID', tags: ['Memory'] },
+      patch: { summary: 'Update memory metadata or re-embed updated content', tags: ['Memory'] },
+      delete: { summary: 'Soft-delete or hard-delete memory item', tags: ['Memory'] },
+    },
     '/api/v1/graph/entities': {
       post: { summary: 'Upsert Knowledge Graph entity', tags: ['Knowledge Graph'] },
       get: { summary: 'Search Knowledge Graph entities & relationships', tags: ['Knowledge Graph'] },
     },
     '/api/v1/graph/relationships': { post: { summary: 'Create Knowledge Graph relationship with contradiction check', tags: ['Knowledge Graph'] } },
     '/api/v1/graph/traverse/{entityId}': { get: { summary: 'BFS traverse Knowledge Graph neighborhood', tags: ['Knowledge Graph'] } },
-    '/api/v1/research': { post: { summary: 'Run 16-stage autonomous web research & citation synthesis', tags: ['Research'] } },
+    '/api/v1/research': {
+      get: { summary: 'List autonomous research reports', tags: ['Research'] },
+      post: { summary: 'Run 16-stage autonomous web research & citation synthesis', tags: ['Research'] },
+    },
+    '/api/v1/research/{id}': { get: { summary: 'Get research report with claims and citations', tags: ['Research'] } },
     '/api/v1/knowledge/ingest': { post: { summary: 'Ingest text, URL, or base64 PDF document locally', tags: ['Knowledge'] } },
     '/api/v1/knowledge/learn': { post: { summary: 'Trigger live web research learning on topic', tags: ['Knowledge'] } },
+    '/api/v1/knowledge/sources': { get: { summary: 'List verified external knowledge sources', tags: ['Knowledge'] } },
     '/api/v1/skills': {
       get: { summary: 'List procedural skills registry', tags: ['Skills'] },
       post: { summary: 'Register or version a reusable skill', tags: ['Skills'] },
@@ -87,7 +108,12 @@ forgeRouter.get('/openapi.json', requireAdminConsoleAuth, async (_req, res) => {
     '/api/v1/tools': { get: { summary: 'List standardized Zod-validated Neo tools', tags: ['Tools'] } },
     '/api/v1/tools/{id}/execute': { post: { summary: 'Execute a registered tool with scope & schema validation', tags: ['Tools'] } },
     '/api/v1/mcp': { post: { summary: 'Model Context Protocol JSON-RPC tools/list & tools/call', tags: ['Tools'] } },
-    '/api/v1/models': { get: { summary: 'List model registry, hardware compatibility, and benchmarks', tags: ['Models'] } },
+    '/api/v1/models': {
+      get: { summary: 'List model registry, hardware compatibility, and benchmarks', tags: ['Models'] },
+      post: { summary: 'Register an open-weight model descriptor', tags: ['Models'] },
+    },
+    '/api/v1/models/{id}': { delete: { summary: 'Remove an inactive downloaded model', tags: ['Models'] } },
+    '/api/v1/models/{id}/verify': { post: { summary: 'Verify active runtime health for model', tags: ['Models'] } },
     '/api/v1/models/evaluate': { post: { summary: 'Run 12-category Neo intelligence benchmark suite', tags: ['Models'] } },
     '/api/v1/models/install': { post: { summary: 'Verify hardware/license & pull/download open-weight model', tags: ['Models'] } },
     '/api/v1/models/activate': { post: { summary: 'Promote model to active role', tags: ['Models'] } },
@@ -97,7 +123,9 @@ forgeRouter.get('/openapi.json', requireAdminConsoleAuth, async (_req, res) => {
     '/api/v1/evolution/training': { post: { summary: 'Prepare privacy-filtered JSONL SFT/LoRA training dataset & job', tags: ['Evolution'] } },
     '/api/v1/business/analyze': { post: { summary: 'Deep multi-module business & accounting audit', tags: ['Business Intelligence'] } },
     '/api/v1/engineer/task': { post: { summary: 'Autonomous Plan->Code->Test->Fix software engineering task', tags: ['Engineer'] } },
+    '/api/v1/modules/{id}/execute': { post: { summary: 'Execute promoted candidate module in isolated sandbox', tags: ['Engineer'] } },
     '/api/v1/forge/create': { post: { summary: 'Synthesize, test in isolated subprocess sandbox, and register a new API', tags: ['API Forge'] } },
+    '/api/v1/forge/{slug}/toggle': { patch: { summary: 'Enable or disable a forged custom API endpoint', tags: ['API Forge'] } },
   };
 
   for (const api of dynamicApis) {
@@ -139,9 +167,9 @@ forgeRouter.get('/openapi.json', requireAdminConsoleAuth, async (_req, res) => {
     },
     paths,
   });
-});
+}));
 
-forgeRouter.all('/custom/:slug', requireApiGatewayAuth('read'), async (req, res) => {
+forgeRouter.all('/custom/:slug', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   if (!['GET', 'HEAD'].includes(req.method) && !req.neoAuth!.scopes.includes('write') && !req.neoAuth!.scopes.includes('admin')) {
     return res.status(403).json({ error: 'Write scope is required for mutating custom API requests.' });
   }
@@ -171,4 +199,4 @@ forgeRouter.all('/custom/:slug', requireApiGatewayAuth('read'), async (req, res)
   });
 
   return res.status(result.status).json(result.body);
-});
+}));

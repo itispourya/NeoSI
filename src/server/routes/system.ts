@@ -6,10 +6,11 @@ import { inspectHardware } from '../inference/hardware.ts';
 import { neoInferenceEngine } from '../inference/registry.ts';
 import { getCapabilityRegistry } from '../multimodal/capabilities.ts';
 import { requireApiGatewayAuth } from '../security/auth.ts';
+import { asyncHandler } from '../security/headers.ts';
 
 export const systemRouter = Router();
 
-systemRouter.get('/health', async (_req, res) => {
+systemRouter.get('/health', asyncHandler(async (_req, res) => {
   // Public liveness endpoint: do not expose tenant memory volume, task activity, or infrastructure details.
   res.json({
     status: 'ok',
@@ -17,9 +18,9 @@ systemRouter.get('/health', async (_req, res) => {
     version: '2.0.0',
     timestamp: new Date().toISOString(),
   });
-});
+}));
 
-systemRouter.get('/ready', async (_req, res) => {
+systemRouter.get('/ready', asyncHandler(async (_req, res) => {
   try {
     const db = await getDb();
     await db.listTenants();
@@ -41,9 +42,9 @@ systemRouter.get('/ready', async (_req, res) => {
       timestamp: new Date().toISOString(),
     });
   }
-});
+}));
 
-systemRouter.get('/status', requireApiGatewayAuth('read'), async (_req, res) => {
+systemRouter.get('/status', requireApiGatewayAuth('read'), asyncHandler(async (_req, res) => {
   const [db, hardware, runtimeHealth] = await Promise.all([
     getDb(),
     inspectHardware(),
@@ -61,14 +62,14 @@ systemRouter.get('/status', requireApiGatewayAuth('read'), async (_req, res) => 
     activeTasks: agentRuntime.getActiveTaskCount(),
     timestamp: new Date().toISOString(),
   });
-});
+}));
 
-systemRouter.get('/capabilities', requireApiGatewayAuth('read'), async (_req, res) => {
+systemRouter.get('/capabilities', requireApiGatewayAuth('read'), asyncHandler(async (_req, res) => {
   const capabilities = await getCapabilityRegistry();
   res.json({ capabilities });
-});
+}));
 
-systemRouter.get('/metrics', requireApiGatewayAuth('read'), async (req, res) => {
+systemRouter.get('/metrics', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
   const tenantId = req.neoAuth!.tenant.id;
   const db = await getDb();
   const [memoryCounts, telemetry, tasks, toolExecutions, hardware] = await Promise.all([
@@ -99,6 +100,5 @@ systemRouter.get('/metrics', requireApiGatewayAuth('read'), async (req, res) => 
       recentExecutions: toolExecutions.length,
       successRate: toolExecutions.length ? Number(((toolsOk / toolExecutions.length) * 100).toFixed(1)) : 100,
     },
-
   });
-});
+}));

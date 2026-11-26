@@ -6,6 +6,8 @@ test('protected core security and env files cannot be targeted by self-upgrades'
   assert.equal(isProtectedPath('.env'), true);
   assert.equal(isProtectedPath('src/server/security/auth.ts'), true);
   assert.equal(isProtectedPath('src/server/config/env.ts'), true);
+  assert.equal(isProtectedPath('../src/server/security/auth.ts'), true);
+  assert.equal(isProtectedPath('/etc/passwd'), true);
   assert.equal(isProtectedPath('src/server/modules/optimizer.js'), false);
 
   const check = validateTargetFiles(['src/server/modules/ok.js', 'src/server/security/crypto.ts']);

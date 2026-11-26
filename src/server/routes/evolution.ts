@@ -10,11 +10,12 @@ import {
   runCodeEvolutionProposal,
   runConfigExperiment,
 } from '../evolution/pipeline.ts';
-import { requireAdminConsoleAuth, requireApiGatewayAuth } from '../security/auth.ts';
+import { requireAdminConsoleAuth } from '../security/auth.ts';
+import { asyncHandler } from '../security/headers.ts';
 
 export const evolutionRouter = Router();
 
-evolutionRouter.get('/evolution', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.get('/evolution', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
   const [proposals, experiments, trainingJobs] = await Promise.all([
     db.listUpgrades(),
@@ -27,28 +28,28 @@ evolutionRouter.get('/evolution', requireAdminConsoleAuth, async (req, res) => {
     trainingJobs,
     autoMergeEnabled: env.autoMergeSafeUpgrades,
   });
-});
+}));
 
-evolutionRouter.post('/evolution/diagnose', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.post('/evolution/diagnose', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const focusArea = typeof req.body?.focusArea === 'string' ? req.body.focusArea.slice(0, 200) : undefined;
   const proposal = await runCodeEvolutionProposal(focusArea);
   res.status(201).json({ proposal });
-});
+}));
 
-evolutionRouter.post('/evolution/proposals', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.post('/evolution/proposals', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const focusArea = typeof req.body?.focusArea === 'string' ? req.body.focusArea.slice(0, 200) : undefined;
   const proposal = await runCodeEvolutionProposal(focusArea);
   res.status(201).json({ proposal });
-});
+}));
 
-evolutionRouter.get('/evolution/proposals/:id', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.get('/evolution/proposals/:id', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
   const proposal = await db.getUpgradeById(String(req.params.id));
   if (!proposal) return res.status(404).json({ error: 'Evolution proposal not found' });
   return res.json({ proposal });
-});
+}));
 
-evolutionRouter.post('/evolution/proposals/:id/approve', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.post('/evolution/proposals/:id/approve', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   try {
     const proposal = await approveCodeUpgrade(String(req.params.id));
     if (!proposal) return res.status(404).json({ error: 'Evolution proposal not found' });
@@ -56,19 +57,19 @@ evolutionRouter.post('/evolution/proposals/:id/approve', requireAdminConsoleAuth
   } catch (err) {
     return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
-});
+}));
 
-evolutionRouter.post('/evolution/proposals/:id/reject', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.post('/evolution/proposals/:id/reject', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const proposal = await rejectCodeUpgrade(String(req.params.id));
   if (!proposal) return res.status(404).json({ error: 'Evolution proposal not found' });
   return res.json({ proposal });
-});
+}));
 
-evolutionRouter.post('/evolution/proposals/:id/rollback', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.post('/evolution/proposals/:id/rollback', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const proposal = await rollbackCodeUpgrade(String(req.params.id));
   if (!proposal) return res.status(404).json({ error: 'Evolution proposal not found' });
   return res.json({ proposal });
-});
+}));
 
 const experimentSchema = z.object({
   title: z.string().min(3).max(160),
@@ -77,12 +78,12 @@ const experimentSchema = z.object({
   configAfter: z.record(z.string(), z.unknown()).default({}),
 });
 
-evolutionRouter.post('/evolution/experiments', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.post('/evolution/experiments', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const parsed = experimentSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid experiment payload', issues: parsed.error.issues });
   const experiment = await runConfigExperiment(parsed.data);
   return res.status(201).json({ experiment });
-});
+}));
 
 const trainingSchema = z.object({
   baseModelId: z.string().min(2).max(120).default('qwen2.5:3b-instruct'),
@@ -90,7 +91,7 @@ const trainingSchema = z.object({
   minReliability: z.number().min(0).max(1).default(0.75),
 });
 
-evolutionRouter.post('/evolution/training', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.post('/evolution/training', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const parsed = trainingSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid training payload', issues: parsed.error.issues });
   const job = await prepareAndRunTrainingJob({
@@ -100,22 +101,22 @@ evolutionRouter.post('/evolution/training', requireAdminConsoleAuth, async (req,
     minReliability: parsed.data.minReliability,
   });
   return res.status(201).json({ job });
-});
+}));
 
 // Backward-compatible /upgrades aliases
-evolutionRouter.get('/upgrades', requireAdminConsoleAuth, async (_req, res) => {
+evolutionRouter.get('/upgrades', requireAdminConsoleAuth, asyncHandler(async (_req, res) => {
   const db = await getDb();
   const upgrades = await db.listUpgrades();
   res.json({ upgrades, autoMergeEnabled: env.autoMergeSafeUpgrades });
-});
+}));
 
-evolutionRouter.post('/upgrades/diagnose', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.post('/upgrades/diagnose', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const focusArea = typeof req.body?.focusArea === 'string' ? req.body.focusArea.slice(0, 200) : undefined;
   const proposal = await runCodeEvolutionProposal(focusArea);
   res.status(201).json({ proposal });
-});
+}));
 
-evolutionRouter.post('/upgrades/:id/approve', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.post('/upgrades/:id/approve', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   try {
     const proposal = await approveCodeUpgrade(String(req.params.id));
     if (!proposal) return res.status(404).json({ error: 'Upgrade proposal not found' });
@@ -123,10 +124,10 @@ evolutionRouter.post('/upgrades/:id/approve', requireAdminConsoleAuth, async (re
   } catch (err) {
     return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
-});
+}));
 
-evolutionRouter.post('/upgrades/:id/rollback', requireAdminConsoleAuth, async (req, res) => {
+evolutionRouter.post('/upgrades/:id/rollback', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const proposal = await rollbackCodeUpgrade(String(req.params.id));
   if (!proposal) return res.status(404).json({ error: 'Upgrade proposal not found' });
   return res.json({ proposal });
-});
+}));

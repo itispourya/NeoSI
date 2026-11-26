@@ -17,16 +17,17 @@ import {
   verifyAdminCredential,
 } from '../security/auth.ts';
 import { generateScopedApiKey, signWebhookPayload, validateExternalUrlAsync } from '../security/crypto.ts';
+import { asyncHandler } from '../security/headers.ts';
 import { toolRegistry } from '../tools/registry.ts';
 
 export const adminRouter = Router();
 
-adminRouter.get('/auth/status', async (_req, res) => {
+adminRouter.get('/auth/status', asyncHandler(async (_req, res) => {
   const lockState = await getAdminLockState();
   res.json(lockState);
-});
+}));
 
-adminRouter.post('/auth/claim', async (req, res) => {
+adminRouter.post('/auth/claim', asyncHandler(async (req, res) => {
   const rate = checkRateLimit(`admin-claim:${req.ip || req.socket.remoteAddress || 'unknown'}`, 5);
   if (!rate.allowed) {
     res.setHeader('Retry-After', String(Math.ceil(rate.resetMs / 1000)));
@@ -39,9 +40,9 @@ adminRouter.post('/auth/claim', async (req, res) => {
   }
   const token = issueAdminToken();
   return res.status(201).json({ token, locked: true });
-});
+}));
 
-adminRouter.post('/auth/login', async (req, res) => {
+adminRouter.post('/auth/login', asyncHandler(async (req, res) => {
   const rate = checkRateLimit(`admin-login:${req.ip || req.socket.remoteAddress || 'unknown'}`, 10);
   if (!rate.allowed) {
     res.setHeader('Retry-After', String(Math.ceil(rate.resetMs / 1000)));
@@ -54,10 +55,21 @@ adminRouter.post('/auth/login', async (req, res) => {
   }
   const token = issueAdminToken();
   return res.json({ token });
-});
+}));
 
-adminRouter.get('/overview', requireAdminConsoleAuth, async (_req, res) => {
+function mergeById<T extends { id: string }>(...lists: T[][]): T[] {
+  const map = new Map<string, T>();
+  for (const list of lists) {
+    for (const item of list) {
+      if (!map.has(item.id)) map.set(item.id, item);
+    }
+  }
+  return Array.from(map.values());
+}
+
+adminRouter.get('/overview', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
+  const activeTenantId = req.neoAuth!.tenant.id;
   const [
     tenants,
     apiKeys,
@@ -82,10 +94,14 @@ adminRouter.get('/overview', requireAdminConsoleAuth, async (_req, res) => {
     scheduledJobs,
     experiments,
     trainingJobs,
-    researchReports,
-    knowledgeSources,
-    entities,
-    relationships,
+    researchReportsTenant,
+    researchReportsGlobal,
+    knowledgeSourcesTenant,
+    knowledgeSourcesGlobal,
+    entitiesTenant,
+    entitiesGlobal,
+    relationshipsTenant,
+    relationshipsGlobal,
     capabilities,
     objectives,
   ] = await Promise.all([
@@ -112,14 +128,22 @@ adminRouter.get('/overview', requireAdminConsoleAuth, async (_req, res) => {
     db.listScheduledJobs(),
     db.listEvolutionExperiments(25),
     db.listTrainingJobs(undefined, 20),
+    db.listResearchReports(activeTenantId, 15),
     db.listResearchReports('global', 15),
+    db.listKnowledgeSources(activeTenantId, 25),
     db.listKnowledgeSources('global', 25),
+    db.listEntities(activeTenantId, { limit: 40 }),
     db.listEntities('global', { limit: 40 }),
+    db.listRelationships(activeTenantId, undefined, 50),
     db.listRelationships('global', undefined, 50),
     getCapabilityRegistry(),
     db.listObjectives(undefined, { limit: 30 }),
   ]);
 
+  const researchReports = mergeById(researchReportsTenant, researchReportsGlobal);
+  const knowledgeSources = mergeById(knowledgeSourcesTenant, knowledgeSourcesGlobal);
+  const entities = mergeById(entitiesTenant, entitiesGlobal);
+  const relationships = mergeById(relationshipsTenant, relationshipsGlobal);
   const repoIndex = indexWorkspaceCodebase();
 
   res.json({
@@ -162,7 +186,7 @@ adminRouter.get('/overview', requireAdminConsoleAuth, async (_req, res) => {
       topModules: repoIndex.files.slice(0, 12),
     },
   });
-});
+}));
 
 const createKeySchema = z.object({
   tenantId: z.string().min(1),
@@ -170,7 +194,7 @@ const createKeySchema = z.object({
   scopes: z.array(z.enum(['read', 'write', 'forge', 'admin'])).min(1),
 });
 
-adminRouter.post('/keys', requireAdminConsoleAuth, async (req, res) => {
+adminRouter.post('/keys', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const parsed = createKeySchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid API key payload', issues: parsed.error.issues });
@@ -201,9 +225,9 @@ adminRouter.post('/keys', requireAdminConsoleAuth, async (req, res) => {
     rawKey,
     key: { ...record, key_hash: undefined },
   });
-});
+}));
 
-adminRouter.post('/keys/:id/rotate', requireAdminConsoleAuth, async (req, res) => {
+adminRouter.post('/keys/:id/rotate', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
   const existing = await db.getApiKeyById(String(req.params.id));
   if (!existing || existing.revoked_at) return res.status(404).json({ error: 'Active API key not found' });
@@ -228,14 +252,14 @@ adminRouter.post('/keys/:id/rotate', requireAdminConsoleAuth, async (req, res) =
   });
 
   return res.status(201).json({ rawKey, key: { ...rotated, key_hash: undefined } });
-});
+}));
 
-adminRouter.delete('/keys/:id', requireAdminConsoleAuth, async (req, res) => {
+adminRouter.delete('/keys/:id', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
   const ok = await db.revokeApiKey(String(req.params.id));
   if (!ok) return res.status(404).json({ error: 'Active key not found' });
   return res.json({ revoked: true });
-});
+}));
 
 const createTenantSchema = z.object({
   name: z.string().min(2).max(80),
@@ -245,7 +269,7 @@ const createTenantSchema = z.object({
   pii_redaction: z.boolean().default(false),
 });
 
-adminRouter.post('/tenants', requireAdminConsoleAuth, async (req, res) => {
+adminRouter.post('/tenants', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const parsed = createTenantSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid tenant payload', issues: parsed.error.issues });
   const db = await getDb();
@@ -261,9 +285,10 @@ adminRouter.post('/tenants', requireAdminConsoleAuth, async (req, res) => {
     });
     return res.status(201).json({ tenant });
   } catch (err) {
-    return res.status(409).json({ error: err instanceof Error ? err.message : 'Tenant slug conflict' });
+    console.error('[Neo Admin] Tenant creation error:', err);
+    return res.status(409).json({ error: 'Tenant slug already exists or workspace could not be created' });
   }
-});
+}));
 
 const updateTenantSchema = z.object({
   workspace_language: z.enum(['en', 'fa', 'ar', 'nl']).optional(),
@@ -273,7 +298,7 @@ const updateTenantSchema = z.object({
   rate_limit_rpm: z.number().int().min(10).max(5000).optional(),
 });
 
-adminRouter.patch('/tenants/:id', requireAdminConsoleAuth, async (req, res) => {
+adminRouter.patch('/tenants/:id', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const parsed = updateTenantSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid tenant update', issues: parsed.error.issues });
 
@@ -286,9 +311,9 @@ adminRouter.patch('/tenants/:id', requireAdminConsoleAuth, async (req, res) => {
   const updated = await db.updateTenant(String(req.params.id), parsed.data);
   if (!updated) return res.status(404).json({ error: 'Tenant not found' });
   return res.json({ tenant: { ...updated, webhook_secret: updated.webhook_secret ? '********' : null } });
-});
+}));
 
-adminRouter.post('/tenants/:id/sign-webhook-preview', requireAdminConsoleAuth, async (req, res) => {
+adminRouter.post('/tenants/:id/sign-webhook-preview', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
   const tenant = await db.getTenantById(String(req.params.id));
   if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
@@ -296,7 +321,7 @@ adminRouter.post('/tenants/:id/sign-webhook-preview', requireAdminConsoleAuth, a
   const secret = tenant.webhook_secret || 'neos_webhook_preview_secret';
   const signed = signWebhookPayload(payload, secret);
   return res.json({ payload, header: signed.header, signature: signed.signature, timestamp: signed.timestamp });
-});
+}));
 
 const createStreamSchema = z.object({
   topic: z.string().min(3).max(200),
@@ -304,29 +329,29 @@ const createStreamSchema = z.object({
   interval_minutes: z.number().int().min(5).max(1440).default(120),
 });
 
-adminRouter.post('/streams', requireAdminConsoleAuth, async (req, res) => {
+adminRouter.post('/streams', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const parsed = createStreamSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid topic stream', issues: parsed.error.issues });
   const db = await getDb();
   const stream = await db.createTopicStream(parsed.data);
   res.status(201).json({ stream });
-});
+}));
 
-adminRouter.patch('/streams/:id', requireAdminConsoleAuth, async (req, res) => {
+adminRouter.patch('/streams/:id', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
   const updated = await db.toggleTopicStream(String(req.params.id), Boolean(req.body?.enabled));
   if (!updated) return res.status(404).json({ error: 'Topic stream not found' });
   res.json({ stream: updated });
-});
+}));
 
 // Autonomous Scheduler management
-adminRouter.get('/scheduler', requireAdminConsoleAuth, async (_req, res) => {
+adminRouter.get('/scheduler', requireAdminConsoleAuth, asyncHandler(async (_req, res) => {
   const db = await getDb();
   const jobs = await db.listScheduledJobs();
   res.json({ jobs });
-});
+}));
 
-adminRouter.patch('/scheduler/:id', requireAdminConsoleAuth, async (req, res) => {
+adminRouter.patch('/scheduler/:id', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
   const patch: { enabled?: boolean; interval_ms?: number } = {};
   if (typeof req.body?.enabled === 'boolean') patch.enabled = req.body.enabled;
@@ -336,9 +361,9 @@ adminRouter.patch('/scheduler/:id', requireAdminConsoleAuth, async (req, res) =>
   const updated = await db.updateScheduledJob(String(req.params.id), patch);
   if (!updated) return res.status(404).json({ error: 'Scheduled job not found' });
   return res.json({ job: updated });
-});
+}));
 
-adminRouter.post('/scheduler/tick', requireAdminConsoleAuth, async (req, res) => {
+adminRouter.post('/scheduler/tick', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const result = await autonomousScheduler.tick(Boolean(req.body?.force));
   res.json(result);
-});
+}));
