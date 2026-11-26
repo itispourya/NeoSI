@@ -552,6 +552,9 @@ export class NeoToolRegistry {
           query: input.query,
           urls: input.urls,
         });
+        if (report.status !== 'completed' || report.citations.length === 0) {
+          throw new Error('Web research did not obtain any usable external citations; the report is recorded as failed.');
+        }
         return {
           reportId: report.id,
           confidence: report.confidence,
