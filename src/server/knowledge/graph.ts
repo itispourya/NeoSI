@@ -90,20 +90,9 @@ export class NeoKnowledgeGraph {
       entities.push(ent);
     }
 
-    let relationshipsAdded = 0;
-    for (let i = 0; i + 1 < entities.length && i < 4; i++) {
-      await this.addRelationship({
-        tenantId,
-        sourceEntityId: entities[i].id,
-        targetEntityId: entities[i + 1].id,
-        relationType: 'co_occurs_with',
-        sourceUrl: sourceUrl ?? null,
-        confidence: 0.72,
-      });
-      relationshipsAdded++;
-    }
-
-    return { entitiesAdded: entities.length, relationshipsAdded };
+    // Entity co-occurrence is not a semantic relationship. Do not fabricate graph edges.
+    // Relationships must be extracted with explicit evidence and validated by addRelationship().
+    return { entitiesAdded: entities.length, relationshipsAdded: 0 };
   }
 
   async searchEntities(tenantId: string, query: string, limit = 10): Promise<Array<GraphEntityRecord & { score: number }>> {
