@@ -65,12 +65,12 @@ export function buildPostgresLexicalFilter(
   const normalized = Array.from(new Set(terms.map((term) => term.trim()).filter(Boolean))).slice(0, 8);
   const params: string[] = [];
   const clauses = normalized.map((term) => {
-    const placeholder = '
-    params.push(`%${term}%`);
-    return `(topic ILIKE ${placeholder} OR title ILIKE ${placeholder} OR content ILIKE ${placeholder})`;
+    const placeholder = '$' + String(startParameterIndex + params.length);
+    params.push('%' + term + '%');
+    return '(topic ILIKE ' + placeholder + ' OR title ILIKE ' + placeholder + ' OR content ILIKE ' + placeholder + ')';
   });
   return {
-    sql: clauses.length > 0 ? `(${clauses.join(' OR ')})` : 'FALSE',
+    sql: clauses.length > 0 ? '(' + clauses.join(' OR ') + ')' : 'FALSE',
     params,
     nextParameterIndex: startParameterIndex + params.length,
   };
