@@ -19,6 +19,17 @@ export interface StartTaskInput {
   deferExecution?: boolean;
 }
 
+const VALID_EXECUTION_SCOPES = new Set(['read', 'write', 'forge', 'admin']);
+
+function normalizeExecutionScopes(scopes?: string[]): string[] {
+  const selected = Array.from(new Set((Array.isArray(scopes) ? scopes : ['read']).filter((scope) => VALID_EXECUTION_SCOPES.has(scope))));
+  return selected.length > 0 ? selected : ['read'];
+}
+
+function scopesFromCheckpoint(checkpoint: Record<string, unknown>): string[] {
+  return normalizeExecutionScopes(Array.isArray(checkpoint.executionScopes) ? checkpoint.executionScopes as string[] : ['read']);
+}
+
 class DurableAgentRuntime {
   private events = new EventEmitter();
   private runningTaskIds = new Set<string>();
@@ -55,7 +66,8 @@ class DurableAgentRuntime {
   async createAndStartTask(input: StartTaskInput): Promise<TaskRecord> {
     const db = await getDb();
     const autonomy = input.autonomy || 'balanced';
-    const planResult = await taskPlanner.buildAdaptivePlan(input.goal, autonomy, input.tenantId, input.scopes || ['read']);
+    const executionScopes = normalizeExecutionScopes(input.scopes);
+    const planResult = await taskPlanner.buildAdaptivePlan(input.goal, autonomy, input.tenantId, executionScopes);
     const budgets = {
       maxSteps: input.budgets?.maxSteps ?? planResult.budgets.maxSteps,
       maxToolCalls: input.budgets?.maxToolCalls ?? planResult.budgets.maxToolCalls,
@@ -75,7 +87,7 @@ class DurableAgentRuntime {
         toolId: s.toolId,
         dependsOn: s.dependsOn,
       })),
-      checkpoint: { lastCompletedStepIndex: -1, evidenceSnippets: [], executionScopes: input.scopes || ['read'] },
+      checkpoint: { lastCompletedStepIndex: -1, evidenceSnippets: [], executionScopes },
       result: null,
       verification: null,
       error: null,
@@ -122,7 +134,7 @@ class DurableAgentRuntime {
 
     if (!input.deferExecution) {
       queueMicrotask(() => {
-        void this.executeTaskLoop(task.id, input.tenantId, input.actor, input.scopes || ['read', 'write']);
+        void this.executeTaskLoop(task.id, input.tenantId, input.actor, executionScopes);
       });
     }
 
@@ -133,14 +145,15 @@ class DurableAgentRuntime {
     const db = await getDb();
     const existing = await db.getTaskById(taskId, tenantId);
     if (!existing) return null;
-    if (existing.status === 'completed' || existing.status === 'failed' || existing.status === 'cancelled') {
+    if (existing.status === 'completed' || existing.status === 'partial' || existing.status === 'failed' || existing.status === 'cancelled') {
       return existing;
     }
-    this.cancelledTaskIds.add(taskId);
-    const updated = await db.updateTask(taskId, {
+    const updated = await db.updateTaskIfStatus(taskId, tenantId, ['planning', 'running'], {
       status: 'cancelled',
       completed_at: new Date().toISOString(),
     });
+    if (!updated) return db.getTaskById(taskId, tenantId);
+    this.cancelledTaskIds.add(taskId);
     await this.emitEvent(taskId, tenantId, 'task.cancelled', { reason: 'Cancelled by request' });
     return updated;
   }
@@ -149,14 +162,23 @@ class DurableAgentRuntime {
     const db = await getDb();
     const existing = await db.getTaskById(taskId, tenantId);
     if (!existing) return null;
-    if (existing.status === 'completed' || existing.status === 'cancelled') return existing;
-    const savedScopes = Array.isArray(existing.checkpoint?.executionScopes)
+    if (existing.status === 'completed' || existing.status === 'cancelled' || existing.status === 'running') return existing;
+    if (!['failed', 'partial', 'planning'].includes(existing.status)) return existing;
+    const savedScopes = normalizeExecutionScopes(Array.isArray(existing.checkpoint?.executionScopes)
       ? (existing.checkpoint.executionScopes as string[])
-      : ['read'];
-    // Resuming can never grant more permissions than the original task or current credential.
-    const effectiveScopes = currentScopes.filter((scope) => savedScopes.includes(scope));
+      : ['read']);
+    // A new credential can only recover the intersection of its current scopes and the original grant.
+    const effectiveScopes = normalizeExecutionScopes(currentScopes).filter((scope) => savedScopes.includes(scope));
+    if (effectiveScopes.length === 0) effectiveScopes.push('read');
+    const queued = existing.status === 'planning'
+      ? existing
+      : await db.updateTaskIfStatus(taskId, tenantId, ['failed', 'partial'], {
+          status: 'planning',
+          error: null,
+          completed_at: null,
+        });
+    if (!queued) return db.getTaskById(taskId, tenantId);
     this.cancelledTaskIds.delete(taskId);
-    await db.updateTask(taskId, { status: 'running', error: null });
     await this.emitEvent(taskId, tenantId, 'task.resumed', { actor, scopes: effectiveScopes });
     if (!this.runningTaskIds.has(taskId)) {
       queueMicrotask(() => {
@@ -177,12 +199,8 @@ class DurableAgentRuntime {
       });
       if (!this.runningTaskIds.has(task.id)) {
         queueMicrotask(() => {
-          void this.executeTaskLoop(
-          task.id,
-          task.tenant_id,
-          'system:recovery',
-          Array.isArray(task.checkpoint?.executionScopes) ? (task.checkpoint.executionScopes as string[]) : ['read']
-        );
+          // Recovered tasks do not inherit historical write/admin privileges without a fresh credential.
+        void this.executeTaskLoop(task.id, task.tenant_id, 'system:recovery', ['read']);
         });
       }
     }
@@ -200,15 +218,18 @@ class DurableAgentRuntime {
       return db.getTaskById(taskId, tenantId);
     }
 
+    const db = await getDb();
+    // Atomic claim: only a task in planning state may transition to running.
+    const claimed = await db.updateTaskIfStatus(taskId, tenantId, ['planning'], { status: 'running' });
+    if (!claimed) return db.getTaskById(taskId, tenantId);
+
     this.runningTaskIds.add(taskId);
     const startMs = Date.now();
-    const db = await getDb();
 
     try {
-      const task = await db.getTaskById(taskId, tenantId);
-      if (!task || task.status === 'cancelled' || task.status === 'completed') return task;
-
-      await db.updateTask(task.id, { status: 'running' });
+      const task = claimed;
+      const scopes = normalizeExecutionScopes(scopesFromCheckpoint(task.checkpoint));
+      await this.emitEvent(task.id, tenantId, 'task.started', { goal: task.goal });
       await this.emitEvent(task.id, tenantId, 'task.started', { goal: task.goal });
 
       const steps = await db.listTaskSteps(task.id, tenantId);
@@ -233,12 +254,13 @@ class DurableAgentRuntime {
 
         // Budget enforcement
         const elapsed = Date.now() - startMs;
-        if (usage.stepsExecuted >= task.budgets.maxSteps || elapsed > task.budgets.maxDurationMs) {
-          const msg = `Execution budget exceeded (steps=${usage.stepsExecuted}/${task.budgets.maxSteps}, elapsed=${elapsed}ms)`;
-          await db.updateTask(task.id, {
+        const cumulativeDurationMs = Number(task.usage.durationMs || 0) + elapsed;
+        if (usage.stepsExecuted >= task.budgets.maxSteps || cumulativeDurationMs > task.budgets.maxDurationMs) {
+          const msg = `Execution budget exceeded (steps=${usage.stepsExecuted}/${task.budgets.maxSteps}, elapsed=${cumulativeDurationMs}ms)`;
+          await db.updateTaskIfStatus(task.id, tenantId, ['running'], {
             status: 'failed',
             error: msg,
-            usage: { ...usage, durationMs: elapsed },
+            usage: { ...usage, durationMs: cumulativeDurationMs },
             completed_at: new Date().toISOString(),
           });
           await this.emitEvent(task.id, tenantId, 'task.failed', { error: msg });
@@ -337,8 +359,22 @@ class DurableAgentRuntime {
             evidenceSnippets.push(wrapped.wrappedData);
           }
 
+          const afterExecution = await db.getTaskById(task.id, tenantId);
+          if (this.cancelledTaskIds.has(task.id) || afterExecution?.status === 'cancelled') {
+            await db.upsertTaskStep({
+              ...step,
+              status: 'failed',
+              error: 'Task was cancelled while this step was executing.',
+              attempts: step.attempts + 1,
+              started_at: step.started_at || new Date().toISOString(),
+              finished_at: new Date().toISOString(),
+            });
+            await this.emitEvent(task.id, tenantId, 'task.cancelled', { stepIndex: step.step_index });
+            return afterExecution;
+          }
+
           usage.stepsExecuted++;
-          usage.durationMs = Date.now() - startMs;
+          usage.durationMs = Number(task.usage.durationMs || 0) + (Date.now() - startMs);
 
           await db.upsertTaskStep({
             ...step,
@@ -361,6 +397,19 @@ class DurableAgentRuntime {
             usage,
           });
         } catch (stepErr) {
+          const latestAfterError = await db.getTaskById(task.id, tenantId);
+          if (this.cancelledTaskIds.has(task.id) || latestAfterError?.status === 'cancelled') {
+            await db.upsertTaskStep({
+              ...step,
+              status: 'failed',
+              error: 'Task was cancelled while this step was executing.',
+              attempts: step.attempts + 1,
+              started_at: step.started_at || new Date().toISOString(),
+              finished_at: new Date().toISOString(),
+            });
+            await this.emitEvent(task.id, tenantId, 'task.cancelled', { stepIndex: step.step_index });
+            return latestAfterError;
+          }
           const msg = stepErr instanceof Error ? stepErr.message : String(stepErr);
           await db.upsertTaskStep({
             ...step,
@@ -373,6 +422,9 @@ class DurableAgentRuntime {
           await this.emitEvent(task.id, tenantId, 'step.failed', { stepIndex: step.step_index, error: msg });
         }
       }
+
+      const beforeFinalization = await db.getTaskById(task.id, tenantId);
+      if (this.cancelledTaskIds.has(task.id) || beforeFinalization?.status === 'cancelled') return beforeFinalization;
 
       const finalVerification = criticEngine.verify({
         goal: task.goal,
@@ -406,15 +458,17 @@ class DurableAgentRuntime {
         unresolvedSteps: unresolvedSteps.length,
       };
 
-      const completed = await db.updateTask(task.id, {
+      const completed = await db.updateTaskIfStatus(task.id, tenantId, ['running'], {
         status: finalStatus,
         result: finalResult,
         verification: finalVerification as unknown as Record<string, unknown>,
         error: finalStatus === 'completed' ? null : executionError || 'Task could not be fully verified.',
-        usage: { ...usage, durationMs: Date.now() - startMs },
+        usage: { ...usage, durationMs: Number(task.usage.durationMs || 0) + (Date.now() - startMs) },
         loop_signature_counts: loopCounts,
         completed_at: new Date().toISOString(),
       });
+
+      if (!completed) return db.getTaskById(task.id, tenantId);
 
       if (hasUsefulOutput) {
         await storeMemory({
@@ -438,8 +492,10 @@ class DurableAgentRuntime {
 
       return completed;
     } catch (err) {
+      const latest = await db.getTaskById(taskId, tenantId);
+      if (this.cancelledTaskIds.has(taskId) || latest?.status === 'cancelled') return latest;
       const msg = err instanceof Error ? err.message : String(err);
-      await db.updateTask(taskId, {
+      await db.updateTaskIfStatus(taskId, tenantId, ['running'], {
         status: 'failed',
         error: msg,
         completed_at: new Date().toISOString(),
