@@ -9,6 +9,18 @@ export interface EmbeddingResult {
   isNeural: boolean;
 }
 
+/** Reject malformed model output and normalize valid embeddings into a stable cosine space. */
+export function normalizeEmbeddingVector(candidate: unknown): number[] | null {
+  if (!Array.isArray(candidate) || candidate.length === 0 || candidate.length > 16_000) return null;
+  if (!candidate.every((value) => typeof value === 'number' && Number.isFinite(value))) return null;
+  const vector = candidate as number[];
+  let squaredNorm = 0;
+  for (const value of vector) squaredNorm += value * value;
+  if (!Number.isFinite(squaredNorm) || squaredNorm < 1e-20) return null;
+  const norm = Math.sqrt(squaredNorm);
+  return vector.map((value) => value / norm);
+}
+
 export class LocalEmbeddingEngine {
   async embed(text: string): Promise<EmbeddingResult> {
     const clean = String(text || '').slice(0, 8000);
@@ -34,8 +46,8 @@ export class LocalEmbeddingEngine {
         });
         if (res.ok) {
           const data = (await res.json()) as { embeddings?: number[][] };
-          const emb = data.embeddings?.[0];
-          if (Array.isArray(emb) && emb.length > 0) {
+          const emb = normalizeEmbeddingVector(data.embeddings?.[0]);
+          if (emb) {
             return {
               vector: emb,
               model: env.embeddingModel,
@@ -62,8 +74,8 @@ export class LocalEmbeddingEngine {
         });
         if (res.ok) {
           const data = (await res.json()) as { data?: Array<{ embedding?: number[] }> };
-          const emb = data.data?.[0]?.embedding;
-          if (Array.isArray(emb) && emb.length > 0) {
+          const emb = normalizeEmbeddingVector(data.data?.[0]?.embedding);
+          if (emb) {
             return {
               vector: emb,
               model: env.embeddingModel,
