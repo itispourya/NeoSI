@@ -95,7 +95,7 @@ export function formatRagContextForPrompt(bundle: RagContextBundle): string {
         bundle.episodic.map((m) => `- [${m.epistemic_status}] ${m.title}: ${m.content.slice(0, 240)}`).join('\n')
     );
   }
-  return sections.join('\n\n');
+  return sections.length ? sanitizeUntrustedContent(sections.join('\n\n'), 'retrieved_memory').wrappedData : '';
 }
 
 function defaultEpistemicStatus(_memoryType: MemoryType, _sourceUrl?: string | null): EpistemicStatus {
