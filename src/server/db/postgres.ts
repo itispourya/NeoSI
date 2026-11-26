@@ -104,6 +104,43 @@ export function buildPostgresLexicalFilter(
   };
 }
 
+export function buildPostgresUpdateTaskIfStatusQuery(
+  id: string,
+  tenantId: string,
+  expectedStatuses: TaskStatus[],
+  patch: Partial<
+    Pick<TaskRecord, 'status' | 'plan' | 'checkpoint' | 'result' | 'verification' | 'error' | 'usage' | 'loop_signature_counts' | 'completed_at'>
+  >
+): { sql: string; values: unknown[] } | null {
+  if (expectedStatuses.length === 0) return null;
+  const columns: Record<string, { column: string; serialize: (value: unknown) => unknown }> = {
+    status: { column: 'status', serialize: (v) => v },
+    plan: { column: 'plan', serialize: (v) => JSON.stringify(v) },
+    checkpoint: { column: 'checkpoint', serialize: (v) => JSON.stringify(v) },
+    result: { column: 'result', serialize: (v) => (v === null ? null : JSON.stringify(v)) },
+    verification: { column: 'verification', serialize: (v) => (v === null ? null : JSON.stringify(v)) },
+    error: { column: 'error', serialize: (v) => v },
+    usage: { column: 'usage', serialize: (v) => JSON.stringify(v) },
+    loop_signature_counts: { column: 'loop_signature_counts', serialize: (v) => JSON.stringify(v) },
+    completed_at: { column: 'completed_at', serialize: (v) => v },
+  };
+  const assignments: string[] = [];
+  const values: unknown[] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    const definition = columns[key];
+    if (!definition) continue;
+    values.push(definition.serialize(value));
+    assignments.push(`${definition.column} = $${values.length}`);
+  }
+  if (assignments.length === 0) return null;
+  assignments.push('updated_at = NOW()');
+  values.push(id, tenantId, expectedStatuses);
+  return {
+    sql: `UPDATE tasks SET ${assignments.join(', ')} WHERE id = $${values.length - 2} AND tenant_id = $${values.length - 1} AND status = ANY($${values.length}::text[]) RETURNING *`,
+    values,
+  };
+}
+
 export class PostgresNeoDatabase implements NeoDatabase {
   public readonly mode = 'postgresql' as const;
   private pool: Pool;
@@ -583,25 +620,27 @@ export class PostgresNeoDatabase implements NeoDatabase {
       input.entity_type,
     ]);
     const vecLiteral = input.embedding.length ? `[${input.embedding.join(',')}]` : null;
+    const embModel = input.embedding_model || 'neo-embed-local-v2';
+    const embDim = input.embedding_dim ?? input.embedding.length;
     if (existing.rows[0]) {
       const mergedAliases = Array.from(new Set([...(existing.rows[0].aliases || []), ...input.aliases]));
       const mergedAttrs = { ...(existing.rows[0].attributes || {}), ...input.attributes };
       const { rows } = await this.pool.query(
-        `UPDATE entities SET aliases = $1, attributes = $2, confidence = $3, embedding = $4::vector, updated_at = NOW() WHERE id = $5 RETURNING *`,
-        [JSON.stringify(mergedAliases), JSON.stringify(mergedAttrs), Math.max(Number(existing.rows[0].confidence), input.confidence), vecLiteral, existing.rows[0].id]
+        `UPDATE entities SET aliases = $1, attributes = $2, confidence = $3, embedding = $4::vector, embedding_model = $5, embedding_dim = $6, updated_at = NOW() WHERE id = $7 RETURNING id, tenant_id, name, entity_type, aliases, attributes, confidence, embedding_model, embedding_dim, created_at, updated_at`,
+        [JSON.stringify(mergedAliases), JSON.stringify(mergedAttrs), Math.max(Number(existing.rows[0].confidence), input.confidence), vecLiteral, embModel, embDim, existing.rows[0].id]
       );
       return { ...rows[0], embedding: input.embedding };
     }
     const { rows } = await this.pool.query(
-      `INSERT INTO entities (id, tenant_id, name, entity_type, aliases, attributes, confidence, embedding) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector) RETURNING *`,
-      [uuidv4(), input.tenant_id, input.name, input.entity_type, JSON.stringify(input.aliases), JSON.stringify(input.attributes), input.confidence, vecLiteral]
+      `INSERT INTO entities (id, tenant_id, name, entity_type, aliases, attributes, confidence, embedding, embedding_model, embedding_dim) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector, $9, $10) RETURNING id, tenant_id, name, entity_type, aliases, attributes, confidence, embedding_model, embedding_dim, created_at, updated_at`,
+      [uuidv4(), input.tenant_id, input.name, input.entity_type, JSON.stringify(input.aliases), JSON.stringify(input.attributes), input.confidence, vecLiteral, embModel, embDim]
     );
     return { ...rows[0], embedding: input.embedding };
   }
 
   async getEntityById(id: string, tenantId: string): Promise<GraphEntityRecord | null> {
     const { rows } = await this.pool.query(
-      'SELECT id, tenant_id, name, entity_type, aliases, attributes, confidence, created_at, updated_at FROM entities WHERE id = $1 AND tenant_id = $2',
+      'SELECT id, tenant_id, name, entity_type, aliases, attributes, confidence, embedding_model, embedding_dim, created_at, updated_at FROM entities WHERE id = $1 AND tenant_id = $2',
       [id, tenantId]
     );
     return rows[0] ? { ...rows[0], embedding: [] } : null;
@@ -621,7 +660,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
       idx++;
     }
     params.push(opts?.limit ?? 50);
-    const { rows } = await this.pool.query(`SELECT id, tenant_id, name, entity_type, aliases, attributes, confidence, created_at, updated_at FROM entities WHERE ${clauses.join(' AND ')} ORDER BY updated_at DESC LIMIT $${idx}`, params);
+    const { rows } = await this.pool.query(`SELECT id, tenant_id, name, entity_type, aliases, attributes, confidence, embedding_model, embedding_dim, created_at, updated_at FROM entities WHERE ${clauses.join(' AND ')} ORDER BY updated_at DESC LIMIT $${idx}`, params);
     return rows.map((r) => ({ ...r, embedding: [] }));
   }
 
@@ -722,32 +761,9 @@ export class PostgresNeoDatabase implements NeoDatabase {
     patch: Parameters<NeoDatabase['updateTask']>[1]
   ): Promise<TaskRecord | null> {
     if (expectedStatuses.length === 0) return null;
-    const columns: Record<string, { column: string; serialize: (value: unknown) => unknown }> = {
-      status: { column: 'status', serialize: (v) => v },
-      plan: { column: 'plan', serialize: (v) => JSON.stringify(v) },
-      checkpoint: { column: 'checkpoint', serialize: (v) => JSON.stringify(v) },
-      result: { column: 'result', serialize: (v) => v === null ? null : JSON.stringify(v) },
-      verification: { column: 'verification', serialize: (v) => v === null ? null : JSON.stringify(v) },
-      error: { column: 'error', serialize: (v) => v },
-      usage: { column: 'usage', serialize: (v) => JSON.stringify(v) },
-      loop_signature_counts: { column: 'loop_signature_counts', serialize: (v) => JSON.stringify(v) },
-      completed_at: { column: 'completed_at', serialize: (v) => v },
-    };
-    const assignments: string[] = [];
-    const values: unknown[] = [];
-    for (const [key, value] of Object.entries(patch)) {
-      const definition = columns[key];
-      if (!definition) continue;
-      values.push(definition.serialize(value));
-      assignments.push(`${definition.column} = ${values.length}`);
-    }
-    if (assignments.length === 0) return this.getTaskById(id, tenantId);
-    assignments.push('updated_at = NOW()');
-    values.push(id, tenantId, expectedStatuses);
-    const { rows } = await this.pool.query(
-      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ${values.length - 2} AND tenant_id = ${values.length - 1} AND status = ANY(${values.length}::text[]) RETURNING *`,
-      values
-    );
+    const query = buildPostgresUpdateTaskIfStatusQuery(id, tenantId, expectedStatuses, patch);
+    if (!query) return Object.keys(patch).length === 0 ? this.getTaskById(id, tenantId) : null;
+    const { rows } = await this.pool.query(query.sql, query.values);
     return rows[0] || null;
   }
 

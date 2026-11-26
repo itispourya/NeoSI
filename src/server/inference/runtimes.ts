@@ -657,6 +657,7 @@ test('handles empty payload gracefully', () => {
       text,
       runtime: 'embedded',
       modelId,
+      isFallback: true,
       promptTokens,
       completionTokens,
       latencyMs,

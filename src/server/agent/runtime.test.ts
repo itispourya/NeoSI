@@ -10,6 +10,7 @@ import { modelRegistry } from '../inference/registry.ts';
 import { runMemoryConsolidation } from '../knowledge/consolidation.ts';
 import { knowledgeGraph } from '../knowledge/graph.ts';
 import { storeMemory } from '../knowledge/memory.ts';
+import { autonomousScheduler } from '../scheduler/autonomousScheduler.ts';
 import { toolRegistry } from '../tools/registry.ts';
 
 let tempDir = '';
@@ -148,6 +149,18 @@ test('Knowledge Graph entity resolution, contradiction detection, and BFS traver
   const sub = await knowledgeGraph.traverse('global', src.id, 2);
   assert.ok(sub.nodes.length >= 3);
   assert.ok(sub.edges.length >= 2);
+
+  // Evidence-grounded SVO extraction creates explicit edges without fabricating co-occurrence
+  const extracted = await knowledgeGraph.extractFromText(
+    'global',
+    'Neos Core uses PostgreSQL for persistence. Coffee Mug sits quietly.',
+    'https://docs.neo.local/arch'
+  );
+  assert.ok(extracted.entitiesAdded >= 2);
+  assert.ok(extracted.relationshipsAdded >= 1);
+  const edges = await (await getDb()).listRelationships('global', undefined, 50);
+  assert.ok(edges.some((e) => e.relation_type === 'uses' && typeof e.properties?.evidence === 'string'));
+  assert.equal(edges.some((e) => e.relation_type === 'co_occurs_with'), false);
 });
 
 test('ToolRegistry validates Zod schemas, enforces scopes, and blocks path traversal/secret files', async () => {
@@ -182,6 +195,46 @@ test('ToolRegistry validates Zod schemas, enforces scopes, and blocks path trave
     { tenantId: 'global', actor: 'test', scopes: ['read'] }
   );
   assert.equal(envRead.ok, false);
+
+  // Symlink parent escape protection for non-existent descendant files
+  const escapeLinkPath = path.join(process.cwd(), 'tmp-test-escape-link');
+  try {
+    fs.symlinkSync(os.tmpdir(), escapeLinkPath);
+    const symlinkRead = await toolRegistry.executeTool(
+      'workspace_read_file',
+      { filePath: 'tmp-test-escape-link/non-existent-file.txt' },
+      { tenantId: 'global', actor: 'test', scopes: ['read'] }
+    );
+    assert.equal(symlinkRead.ok, false);
+    assert.match(symlinkRead.error || '', /Symlink escape blocked/i);
+  } finally {
+    fs.rmSync(escapeLinkPath, { force: true });
+  }
+
+  // memory_search tool enforces embedding-space isolation
+  const db = await getDb();
+  await db.insertMemory({
+    tenant_id: 'global',
+    memory_type: 'semantic',
+    topic: 'foreign-space',
+    title: 'Foreign Embedding Note',
+    content: 'Foreign space record with identical dummy vector only.',
+    structured_facts: {},
+    source_url: null,
+    reliability_score: 0.9,
+    freshness_score: 1,
+    embedding: new Array<number>(768).fill(1),
+    embedding_model: 'foreign-incompatible-embed-v99',
+    embedding_dim: 768,
+  });
+  const searchToolRes = await toolRegistry.executeTool(
+    'memory_search',
+    { query: 'unrelated token xyzzy', limit: 10 },
+    { tenantId: 'global', actor: 'test', scopes: ['read'] }
+  );
+  assert.equal(searchToolRes.ok, true);
+  const matches = (searchToolRes.output?.matches || []) as Array<{ title: string }>;
+  assert.equal(matches.some((m) => m.title === 'Foreign Embedding Note'), false);
 });
 
 test('Durable AgentRuntime persists steps, executes tools, cancels cleanly, and recovers interrupted tasks', async () => {
@@ -305,4 +358,7 @@ test('ModelRegistry checks hardware/licenses & Layer A/C/D evolution run end-to-
   assert.equal(trainJob.status, 'dataset_ready_training_not_started');
   assert.equal(trainJob.metrics.trainingStarted, false);
   assert.equal(trainJob.metrics.adapterProduced, false);
+
+  const objReview = await autonomousScheduler.executeJobKind('objectives_review');
+  assert.ok(Number(objReview.objectivesReviewed) >= 1);
 });

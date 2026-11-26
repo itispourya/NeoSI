@@ -73,6 +73,36 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
     }
   };
 
+  const reindexEmbeddings = async () => {
+    setBusy(true);
+    setStatusMsg(null);
+    try {
+      const res = await apiFetch<{ totalScanned: number; reindexed: number; targetModel: string; targetDim: number }>(
+        '/api/v1/memory/reindex',
+        { method: 'POST', body: JSON.stringify({ force: false }) }
+      );
+      setStatusMsg(
+        `Scanned ${res.totalScanned} memories for ${res.targetModel} (${res.targetDim}d): re-indexed ${res.reindexed} record(s).`
+      );
+      await onRefresh();
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Re-index failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteMemoryItem = async (id: string) => {
+    setBusy(true);
+    try {
+      await apiFetch(`/api/v1/memory/${id}`, { method: 'DELETE' });
+      setSearchResults((prev) => (prev ? prev.filter((item) => item.id !== id) : null));
+      await onRefresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const runResearch = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -119,16 +149,26 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
       {/* Search + Consolidate + Store */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-display text-sm font-semibold text-slate-100">7-Layer Hybrid RAG Search</h2>
-            <button
-              type="button"
-              onClick={() => void consolidate()}
-              disabled={busy}
-              className="px-3 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200 whitespace-nowrap shrink-0"
-            >
-              Run Consolidation
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void reindexEmbeddings()}
+                disabled={busy}
+                className="px-2.5 py-1 rounded border border-slate-700 bg-[#0B0F17] hover:bg-slate-800 text-[11px] text-slate-300 whitespace-nowrap shrink-0"
+              >
+                Re-index
+              </button>
+              <button
+                type="button"
+                onClick={() => void consolidate()}
+                disabled={busy}
+                className="px-3 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200 whitespace-nowrap shrink-0"
+              >
+                Run Consolidation
+              </button>
+            </div>
           </div>
           <form onSubmit={runSearch} className="flex gap-2">
             <select
@@ -162,9 +202,19 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
               <div key={m.id} className="py-2.5 text-xs space-y-1">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium text-slate-100 truncate">{m.title}</span>
-                  <span className="font-mono text-[11px] text-slate-400 shrink-0">
-                    {m.memory_type} · rel:{m.reliability_score}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="font-mono text-[11px] text-slate-400">
+                      {m.memory_type} · rel:{m.reliability_score}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void deleteMemoryItem(m.id)}
+                      disabled={busy}
+                      className="text-[11px] font-mono text-rose-400 hover:text-rose-300 whitespace-nowrap"
+                    >
+                      Del
+                    </button>
+                  </div>
                 </div>
                 <p className="text-slate-400 line-clamp-2">{m.content}</p>
               </div>
@@ -276,6 +326,23 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
               </div>
             ))}
           </div>
+
+          {data.graph.relationships.length > 0 && (
+            <div className="bg-[#0B0F17] border border-slate-800 rounded p-2.5 max-h-28 overflow-y-auto space-y-1 font-mono text-[11px]">
+              {data.graph.relationships.slice(0, 8).map((rel) => {
+                const src = data.graph.entities.find((e) => e.id === rel.source_entity_id)?.name || rel.source_entity_id.slice(0, 8);
+                const tgt = data.graph.entities.find((e) => e.id === rel.target_entity_id)?.name || rel.target_entity_id.slice(0, 8);
+                return (
+                  <div key={rel.id} className="flex items-center justify-between gap-2 text-slate-300">
+                    <span className="truncate">
+                      {src} <span className="text-blue-400">[{rel.relation_type}]</span> {tgt}
+                    </span>
+                    {rel.contradicts_id && <span className="text-amber-400 shrink-0">conflict</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           <h3 className="font-display text-xs font-semibold text-slate-300 pt-2 border-t border-slate-800">
             Procedural Skills Registry ({data.skills.length})

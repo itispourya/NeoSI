@@ -146,6 +146,28 @@ test('Strict cross-tenant isolation prevents Tenant B from accessing Tenant A me
   // Tenant A chats via SDK -> Tenant B gets its own status cleanly
   const chatRes = await clientA.chat({ message: 'Calculate 20 * 5' });
   assert.ok(chatRes.reply.includes('100'));
+
+  // Memory PATCH preserves embedding metadata and reindex works cleanly
+  const patched = await clientA.memory.update(memId, { content: 'Tenant Alpha revised Q4 reserve is $1,050,000.' });
+  assert.equal(patched.memory.embedding_model, 'neo-embed-local-v2');
+  assert.equal(patched.memory.embedding_dim, 768);
+  const reindexed = await clientA.memory.reindex({ force: true, limit: 20 });
+  assert.ok(reindexed.reindexed >= 1);
+
+  // Objectives are tenant-isolated and updatable via SDK
+  const objA = await clientA.objectives.create({ title: 'Alpha ledger audit', description: 'Verify Q4 reconciliation' });
+  const objAId = String(objA.objective.id);
+  const listB = await clientB.objectives.list();
+  assert.equal(listB.objectives.length, 0);
+  const patchA = await clientA.objectives.update(objAId, { status: 'achieved', progress_pct: 100 });
+  assert.equal(patchA.objective.status, 'achieved');
+
+  // Public readiness check returns 200 without tenant leakage
+  const readyRes = await fetch(`${baseUrl}/api/v1/ready`);
+  assert.equal(readyRes.status, 200);
+  const readyJson = (await readyRes.json()) as { ready: boolean; status: string };
+  assert.equal(readyJson.ready, true);
+  assert.equal(readyJson.status, 'ready');
 });
 
 test('Async DNS SSRF protection rejects localhost, private IPs, and metadata endpoints', async () => {

@@ -62,6 +62,23 @@ class AutonomousScheduler {
         const proposal = await runCodeEvolutionProposal('scheduled_autonomous_diagnostics');
         return { proposalId: proposal.id, status: proposal.status, branch: proposal.branch_name };
       }
+      case 'objectives_review': {
+        const db = await getDb();
+        const objectives = await db.listObjectives(undefined, { status: 'active', limit: 25 });
+        const now = new Date().toISOString();
+        let reviewed = 0;
+        for (const obj of objectives) {
+          const priority = Number(
+            Math.min(1, Math.max(0.1, obj.value_score * 0.45 + obj.urgency_score * 0.4 + (1 - obj.progress_pct / 100) * 0.15)).toFixed(2)
+          );
+          await db.updateObjective(obj.id, obj.tenant_id, {
+            priority_score: priority,
+            last_evaluated_at: now,
+          });
+          reviewed++;
+        }
+        return { objectivesReviewed: reviewed, reviewedAt: now };
+      }
       default:
         throw new Error(`Unknown scheduled job kind: ${jobKind}`);
     }

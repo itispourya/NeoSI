@@ -11,6 +11,13 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
   const [busyModel, setBusyModel] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showRegister, setShowRegister] = useState(false);
+  const [regId, setRegId] = useState('');
+  const [regName, setRegName] = useState('');
+  const [regRuntime, setRegRuntime] = useState<'ollama' | 'vllm' | 'transformers' | 'tensorrt-llm'>('ollama');
+  const [regArch, setRegArch] = useState('qwen2.5');
+  const [regRepo, setRegRepo] = useState('Qwen/Qwen2.5-7B-Instruct');
+  const [regLicense, setRegLicense] = useState('Apache-2.0');
 
   const compatMap = new Map(data.modelCompatibility.map((c) => [c.id, c]));
 
@@ -98,6 +105,48 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
     }
   };
 
+  const registerModel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusyModel('register');
+    setError(null);
+    try {
+      await apiFetch('/api/v1/models', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: regId.trim(),
+          name: regName.trim(),
+          runtime: regRuntime,
+          architecture: regArch.trim(),
+          source_repo: regRepo.trim(),
+          license: regLicense.trim(),
+        }),
+      });
+      setStatusMsg(`Registered open-weight candidate model ${regId.trim()}. Run Verify Runtime before activating.`);
+      setRegId('');
+      setRegName('');
+      setShowRegister(false);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Model registration failed');
+    } finally {
+      setBusyModel(null);
+    }
+  };
+
+  const deleteModel = async (modelId: string) => {
+    setBusyModel(modelId);
+    setError(null);
+    try {
+      await apiFetch(`/api/v1/models/${encodeURIComponent(modelId)}`, { method: 'DELETE' });
+      setStatusMsg(`Removed unregistered/standby model ${modelId}.`);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove model');
+    } finally {
+      setBusyModel(null);
+    }
+  };
+
   const latestEval = data.evaluations[0];
 
   return (
@@ -114,7 +163,14 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
               Hardware Profile: {data.hardware.recommendedProfile} ({data.hardware.cpuCores} vCPU, {data.hardware.totalRamGb} GB RAM, {data.hardware.totalVramGb} GB VRAM)
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setShowRegister((v) => !v)}
+              className="px-3 py-1.5 rounded border border-slate-700 bg-[#0B0F17] hover:bg-slate-800 text-xs text-slate-200 whitespace-nowrap shrink-0"
+            >
+              {showRegister ? 'Close Form' : 'Register Model'}
+            </button>
             <button
               type="button"
               onClick={() => void runBenchmark('neo-embedded-core-v1')}
@@ -133,6 +189,70 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
             </button>
           </div>
         </div>
+
+        {showRegister && (
+          <form onSubmit={registerModel} className="bg-[#0B0F17] border border-slate-800 rounded p-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <input
+              type="text"
+              value={regId}
+              onChange={(e) => setRegId(e.target.value)}
+              placeholder="Model ID (e.g. qwen2.5:7b-instruct)"
+              required
+              className="px-3 py-2 bg-[#111827] border border-slate-700 rounded text-slate-100"
+            />
+            <input
+              type="text"
+              value={regName}
+              onChange={(e) => setRegName(e.target.value)}
+              placeholder="Display Name"
+              required
+              className="px-3 py-2 bg-[#111827] border border-slate-700 rounded text-slate-100"
+            />
+            <select
+              value={regRuntime}
+              onChange={(e) => setRegRuntime(e.target.value as 'ollama' | 'vllm' | 'transformers' | 'tensorrt-llm')}
+              className="px-3 py-2 bg-[#111827] border border-slate-700 rounded text-slate-200"
+            >
+              <option value="ollama">ollama</option>
+              <option value="vllm">vllm</option>
+              <option value="transformers">transformers</option>
+              <option value="tensorrt-llm">tensorrt-llm</option>
+            </select>
+            <input
+              type="text"
+              value={regArch}
+              onChange={(e) => setRegArch(e.target.value)}
+              placeholder="Architecture"
+              required
+              className="px-3 py-2 bg-[#111827] border border-slate-700 rounded text-slate-100"
+            />
+            <input
+              type="text"
+              value={regRepo}
+              onChange={(e) => setRegRepo(e.target.value)}
+              placeholder="Open-weight source repo"
+              required
+              className="px-3 py-2 bg-[#111827] border border-slate-700 rounded text-slate-100"
+            />
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={regLicense}
+                onChange={(e) => setRegLicense(e.target.value)}
+                placeholder="License (Apache-2.0 / MIT)"
+                required
+                className="flex-1 px-3 py-2 bg-[#111827] border border-slate-700 rounded text-slate-100"
+              />
+              <button
+                type="submit"
+                disabled={busyModel !== null}
+                className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium whitespace-nowrap shrink-0"
+              >
+                Save
+              </button>
+            </div>
+          </form>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
@@ -209,6 +329,16 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
                         >
                           Benchmark
                         </button>
+                        {m.deployment_status !== 'active' && m.id !== 'neo-embedded-core-v1' && (
+                          <button
+                            type="button"
+                            onClick={() => void deleteModel(m.id)}
+                            disabled={busyModel !== null}
+                            className="px-2.5 py-1 rounded border border-rose-500/40 text-rose-300 hover:bg-rose-500/10 text-[11px] whitespace-nowrap"
+                          >
+                            Delete
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

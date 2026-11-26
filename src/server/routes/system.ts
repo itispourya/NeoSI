@@ -19,6 +19,29 @@ systemRouter.get('/health', async (_req, res) => {
   });
 });
 
+systemRouter.get('/ready', async (_req, res) => {
+  try {
+    const db = await getDb();
+    await db.listTenants();
+    res.json({
+      ready: true,
+      status: 'ready',
+      service: 'neo',
+      storage: db.mode,
+      sandboxMode: env.sandboxMode,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(503).json({
+      ready: false,
+      status: 'degraded',
+      service: 'neo',
+      error: err instanceof Error ? err.message : 'Database readiness probe failed',
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
 systemRouter.get('/status', requireApiGatewayAuth('read'), async (_req, res) => {
   const [db, hardware, runtimeHealth] = await Promise.all([
     getDb(),

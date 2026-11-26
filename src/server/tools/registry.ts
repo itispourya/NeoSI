@@ -46,8 +46,15 @@ function resolveConfinedWorkspacePath(relPath: string): string {
   if (abs !== WORKSPACE_ROOT && !abs.startsWith(WORKSPACE_ROOT + path.sep)) {
     throw new Error(`Path traversal blocked for '${relPath}'.`);
   }
-  const real = fs.existsSync(abs) ? fs.realpathSync(abs) : abs;
-  if (real !== WORKSPACE_ROOT && !real.startsWith(WORKSPACE_ROOT + path.sep)) {
+  const workspaceReal = fs.realpathSync(WORKSPACE_ROOT);
+  let probe = abs;
+  while (!fs.existsSync(probe)) {
+    const parent = path.dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  const real = fs.existsSync(probe) ? fs.realpathSync(probe) : probe;
+  if (real !== workspaceReal && !real.startsWith(workspaceReal + path.sep)) {
     throw new Error(`Symlink escape blocked for '${relPath}'.`);
   }
   return abs;
@@ -442,6 +449,7 @@ export class NeoToolRegistry {
         const db = await getDb();
         const emb = await embeddingEngine.embed(input.query);
         const matches = await db.searchMemories(emb.vector, {
+          queryEmbeddingModel: emb.model,
           tenantId: ctx.tenantId,
           includeGlobal: true,
           memoryType: input.memoryType as MemoryType | undefined,

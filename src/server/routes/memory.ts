@@ -5,7 +5,7 @@ import type { MemoryType } from '../db/schema.ts';
 import { embeddingEngine } from '../inference/embeddings.ts';
 import { runMemoryConsolidation } from '../knowledge/consolidation.ts';
 import { knowledgeGraph } from '../knowledge/graph.ts';
-import { storeMemory } from '../knowledge/memory.ts';
+import { reindexMemoriesForTenant, storeMemory } from '../knowledge/memory.ts';
 import { requireApiGatewayAuth } from '../security/auth.ts';
 
 export const memoryRouter = Router();
@@ -78,6 +78,18 @@ memoryRouter.post('/memory/consolidate', requireApiGatewayAuth('write'), async (
   res.json(summary);
 });
 
+const reindexSchema = z.object({
+  force: z.boolean().optional(),
+  limit: z.number().int().min(1).max(2000).optional(),
+});
+
+memoryRouter.post('/memory/reindex', requireApiGatewayAuth('write'), async (req, res) => {
+  const parsed = reindexSchema.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid reindex parameters', issues: parsed.error.issues });
+  const summary = await reindexMemoriesForTenant(req.neoAuth!.tenant.id, parsed.data);
+  return res.json(summary);
+});
+
 memoryRouter.get('/memory/:id', requireApiGatewayAuth('read'), async (req, res) => {
   const db = await getDb();
   const mem = await db.getMemoryById(String(req.params.id), req.neoAuth!.tenant.id, true);
@@ -100,11 +112,13 @@ memoryRouter.patch('/memory/:id', requireApiGatewayAuth('write'), async (req, re
 
   const db = await getDb();
   const patch: Record<string, unknown> = { ...parsed.data };
-  if (parsed.data.content || parsed.data.title) {
+  if (parsed.data.content || parsed.data.title || parsed.data.topic) {
     const existing = await db.getMemoryById(String(req.params.id), req.neoAuth!.tenant.id, false);
     if (!existing) return res.status(404).json({ error: 'Memory not found or cross-tenant modification forbidden' });
     const emb = await embeddingEngine.embed(`${parsed.data.topic || existing.topic} ${parsed.data.title || existing.title}\n${parsed.data.content || existing.content}`);
     patch.embedding = emb.vector;
+    patch.embedding_model = emb.model;
+    patch.embedding_dim = emb.dim;
   }
 
   const updated = await db.updateMemory(String(req.params.id), req.neoAuth!.tenant.id, patch);

@@ -84,6 +84,8 @@ export interface MemoryInfo {
   confidence_score: number;
   valid_from: string | null;
   valid_to: string | null;
+  superseded_by?: string | null;
+  epistemic_status?: string;
   version: number;
   similarity?: number;
   hybridScore?: number;
@@ -128,6 +130,23 @@ export interface TaskInfo {
   usage: { stepsExecuted: number; toolCalls: number; durationMs: number; retries: number };
   created_at: string;
   completed_at: string | null;
+}
+
+export interface ObjectiveInfo {
+  id: string;
+  tenant_id: string;
+  title: string;
+  description: string;
+  category: string;
+  priority_score: number;
+  value_score: number;
+  urgency_score: number;
+  uncertainty_score: number;
+  progress_pct: number;
+  status: 'active' | 'paused' | 'achieved' | 'abandoned' | 'blocked';
+  success_criteria: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ToolInfo {
@@ -340,6 +359,7 @@ export interface AdminOverviewPayload {
   jobs: Array<{ id: string; job_type: string; status: string; attempts: number; created_at: string; error: string | null }>;
   scheduledJobs: ScheduledJobInfo[];
   tasks: TaskInfo[];
+  objectives?: ObjectiveInfo[];
   tools: ToolInfo[];
   toolExecutions: ToolExecutionInfo[];
   models: ModelInfo[];

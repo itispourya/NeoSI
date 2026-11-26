@@ -6,6 +6,7 @@ import { classifyIntent, reasoningEngine } from './reasoning.ts';
 import { getDb, resetDbForTests } from '../db/adapter.ts';
 import { computeBm25Scores, hybridRerank } from '../db/vector.ts';
 import { runModelBenchmarkSuite } from '../inference/evaluator.ts';
+import { neoInferenceEngine } from '../inference/registry.ts';
 import { extractTextFromPdfBuffer } from '../multimodal/pdf.ts';
 import { detectPromptInjection, sanitizeUntrustedContent } from '../security/promptGuard.ts';
 
@@ -95,6 +96,15 @@ test('13-stage ReasoningEngine & 12-category Model Benchmark Suite execute nativ
   await resetDbForTests();
   await getDb();
 
+  const embInfer = await neoInferenceEngine.infer({
+    prompt: 'Calculate 40 + 2',
+    preferredRuntime: 'embedded',
+    preferredModelId: 'neo-embedded-core-v1',
+    strictTarget: true,
+  });
+  assert.equal(embInfer.runtime, 'embedded');
+  assert.equal(embInfer.isFallback, true);
+
   const reasoned = await reasoningEngine.run({
     tenantId: 'global',
     actor: 'test-runner',
@@ -109,4 +119,6 @@ test('13-stage ReasoningEngine & 12-category Model Benchmark Suite execute nativ
   assert.equal(evalRecord.total_cases, 12);
   assert.equal(evalRecord.passed_cases, 12);
   assert.equal(evalRecord.overall_score, 100);
+  const codeCase = evalRecord.details.find((d) => d.id === 'code-01');
+  assert.match(codeCase?.reason || '', /Executed in sandbox/i);
 });

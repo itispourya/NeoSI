@@ -128,3 +128,72 @@ tasksRouter.get('/tasks/:id/events', requireApiGatewayAuth('read'), async (req, 
     unsubscribe();
   });
 });
+
+const createObjectiveSchema = z.object({
+  title: z.string().min(3).max(200),
+  description: z.string().min(3).max(4000),
+  category: z.string().min(2).max(80).default('general'),
+  priority_score: z.number().min(0).max(1).default(0.7),
+  value_score: z.number().min(0).max(1).default(0.7),
+  urgency_score: z.number().min(0).max(1).default(0.5),
+  uncertainty_score: z.number().min(0).max(1).default(0.3),
+  success_criteria: z.string().max(1000).default(''),
+  compute_budget_ms: z.number().int().min(1000).max(600_000).default(30_000),
+});
+
+tasksRouter.get('/objectives', requireApiGatewayAuth('read'), async (req, res) => {
+  const db = await getDb();
+  const limit = Math.min(100, Number(req.query.limit || 30));
+  const objectives = await db.listObjectives(req.neoAuth!.tenant.id, { limit });
+  return res.json({ objectives });
+});
+
+tasksRouter.post('/objectives', requireApiGatewayAuth('write'), async (req, res) => {
+  const parsed = createObjectiveSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid objective payload', issues: parsed.error.issues });
+  }
+  const db = await getDb();
+  const objective = await db.createObjective({
+    tenant_id: req.neoAuth!.tenant.id,
+    title: parsed.data.title,
+    description: parsed.data.description,
+    category: parsed.data.category,
+    priority_score: parsed.data.priority_score,
+    value_score: parsed.data.value_score,
+    urgency_score: parsed.data.urgency_score,
+    uncertainty_score: parsed.data.uncertainty_score,
+    progress_pct: 0,
+    status: 'active',
+    success_criteria: parsed.data.success_criteria,
+    compute_budget_ms: parsed.data.compute_budget_ms,
+    compute_used_ms: 0,
+    linked_task_ids: [],
+    linked_research_ids: [],
+    knowledge_gaps: [],
+    last_evaluated_at: new Date().toISOString(),
+  });
+  return res.status(201).json({ objective });
+});
+
+const patchObjectiveSchema = z.object({
+  status: z.enum(['active', 'paused', 'achieved', 'abandoned', 'blocked']).optional(),
+  progress_pct: z.number().min(0).max(100).optional(),
+  priority_score: z.number().min(0).max(1).optional(),
+  title: z.string().min(3).max(200).optional(),
+  description: z.string().min(3).max(4000).optional(),
+});
+
+tasksRouter.patch('/objectives/:id', requireApiGatewayAuth('write'), async (req, res) => {
+  const parsed = patchObjectiveSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid objective update', issues: parsed.error.issues });
+  }
+  const db = await getDb();
+  const updated = await db.updateObjective(String(req.params.id), req.neoAuth!.tenant.id, {
+    ...parsed.data,
+    last_evaluated_at: new Date().toISOString(),
+  });
+  if (!updated) return res.status(404).json({ error: 'Objective not found' });
+  return res.json({ objective: updated });
+});

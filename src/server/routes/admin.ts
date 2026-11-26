@@ -87,6 +87,7 @@ adminRouter.get('/overview', requireAdminConsoleAuth, async (_req, res) => {
     entities,
     relationships,
     capabilities,
+    objectives,
   ] = await Promise.all([
     db.listTenants(),
     db.listApiKeys(),
@@ -116,6 +117,7 @@ adminRouter.get('/overview', requireAdminConsoleAuth, async (_req, res) => {
     db.listEntities('global', { limit: 40 }),
     db.listRelationships('global', undefined, 50),
     getCapabilityRegistry(),
+    db.listObjectives(undefined, { limit: 30 }),
   ]);
 
   const repoIndex = indexWorkspaceCodebase();
@@ -140,6 +142,7 @@ adminRouter.get('/overview', requireAdminConsoleAuth, async (_req, res) => {
     jobs,
     scheduledJobs,
     tasks,
+    objectives,
     tools: toolRegistry.toPublicRecords(dbTools),
     toolExecutions,
     models,

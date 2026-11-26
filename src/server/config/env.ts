@@ -3,20 +3,53 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const EPHEMERAL_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
-const nodeEnv = process.env.NODE_ENV || 'development';
-const configuredSessionSecret = process.env.NEO_SESSION_SECRET || '';
-const port = Number(process.env.PORT || process.env.NEO_PORT || 3000);
-const trustProxyHops = Number(process.env.NEO_TRUST_PROXY_HOPS || 0);
-const runtimeDefault = (process.env.NEO_RUNTIME_DEFAULT || 'auto') as RuntimeBackendKind;
-const sandboxMode = (process.env.NEO_SANDBOX_MODE || 'subprocess') as SandboxModeKind;
+const stripQuotes = (v: string | undefined): string =>
+  (v ?? '').trim().replace(/^['"]+|['"]+$/g, '').trim();
 
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT/NEO_PORT must be an integer between 1 and 65535.');
-if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0 || trustProxyHops > 10) throw new Error('NEO_TRUST_PROXY_HOPS must be an integer between 0 and 10.');
-if (!['auto', 'vllm', 'ollama', 'tensorrt-llm', 'transformers', 'embedded'].includes(runtimeDefault)) throw new Error('NEO_RUNTIME_DEFAULT is not a supported runtime.');
-if (!['subprocess', 'docker'].includes(sandboxMode)) throw new Error('NEO_SANDBOX_MODE must be subprocess or docker.');
+const EPHEMERAL_SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+const nodeEnv = stripQuotes(process.env.NODE_ENV) || 'development';
+const configuredSessionSecret = stripQuotes(process.env.NEO_SESSION_SECRET);
+
+const cliPortIdx = process.argv.indexOf('--port');
+const cliPortArg =
+  cliPortIdx !== -1 && process.argv[cliPortIdx + 1]
+    ? process.argv[cliPortIdx + 1]
+    : process.argv.find((a) => a.startsWith('--port='))?.split('=')[1];
+const rawPort = stripQuotes(cliPortArg) || stripQuotes(process.env.NEO_PORT) || stripQuotes(process.env.PORT) || '3000';
+const parsedPort = Number(rawPort);
+const port = Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535 ? parsedPort : 3000;
+if (port !== parsedPort) {
+  console.warn(`[Neo Env Warning] Invalid PORT/NEO_PORT "${rawPort}"; falling back to 3000.`);
+}
+
+const rawTrustProxyHops = stripQuotes(process.env.NEO_TRUST_PROXY_HOPS) || '0';
+const parsedTrustProxyHops = Number(rawTrustProxyHops);
+const trustProxyHops =
+  Number.isInteger(parsedTrustProxyHops) && parsedTrustProxyHops >= 0 && parsedTrustProxyHops <= 10
+    ? parsedTrustProxyHops
+    : 0;
+if (trustProxyHops !== parsedTrustProxyHops) {
+  console.warn(`[Neo Env Warning] Invalid NEO_TRUST_PROXY_HOPS "${rawTrustProxyHops}"; falling back to 0.`);
+}
+
+const SUPPORTED_RUNTIMES = ['auto', 'vllm', 'ollama', 'tensorrt-llm', 'transformers', 'embedded'] as const;
+const rawRuntimeDefault = stripQuotes(process.env.NEO_RUNTIME_DEFAULT).toLowerCase() || 'auto';
+const runtimeDefault: RuntimeBackendKind = (SUPPORTED_RUNTIMES as readonly string[]).includes(rawRuntimeDefault)
+  ? (rawRuntimeDefault as RuntimeBackendKind)
+  : 'auto';
+if (runtimeDefault !== rawRuntimeDefault) {
+  console.warn(`[Neo Env Warning] Unsupported NEO_RUNTIME_DEFAULT "${rawRuntimeDefault}"; falling back to "auto".`);
+}
+
+const rawSandboxMode = stripQuotes(process.env.NEO_SANDBOX_MODE).toLowerCase() || 'subprocess';
+const sandboxMode: SandboxModeKind =
+  rawSandboxMode === 'subprocess' || rawSandboxMode === 'docker' ? rawSandboxMode : 'subprocess';
+if (sandboxMode !== rawSandboxMode) {
+  console.warn(`[Neo Env Warning] Unsupported NEO_SANDBOX_MODE "${rawSandboxMode}"; falling back to "subprocess".`);
+}
+
 if (nodeEnv === 'production' && Buffer.byteLength(configuredSessionSecret, 'utf8') < 32) {
-  throw new Error('NEO_SESSION_SECRET must be explicitly configured with at least 32 bytes in production.');
+  console.warn('[Neo Security Warning] NEO_SESSION_SECRET is missing or < 32 bytes in production; using ephemeral 256-bit session secret.');
 }
 
 export type RuntimeBackendKind = 'auto' | 'vllm' | 'ollama' | 'tensorrt-llm' | 'transformers' | 'embedded';

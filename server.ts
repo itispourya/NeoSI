@@ -65,9 +65,27 @@ async function startServer() {
 
   app.use(structuredErrorHandler);
 
-  app.listen(env.port, '0.0.0.0', () => {
+  const httpServer = app.listen(env.port, '0.0.0.0', () => {
     console.log(`[Neo] Sovereign Cognitive OS & API Forge listening on http://0.0.0.0:${env.port}`);
   });
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[Neo] Received ${signal}, shutting down cleanly...`);
+    autonomousScheduler.stop();
+    knowledgeDaemon.stop();
+    await new Promise<void>((resolve) => httpServer.close(() => resolve())).catch(() => {});
+    const { jobQueue } = await import('./src/server/queue/jobQueue.ts');
+    await jobQueue.close().catch(() => {});
+    const db = await getDb().catch(() => null);
+    await db?.close?.().catch(() => {});
+    process.exit(0);
+  };
+
+  process.once('SIGINT', () => void shutdown('SIGINT'));
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
 startServer().catch((err) => {

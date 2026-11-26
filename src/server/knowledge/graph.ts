@@ -22,6 +22,8 @@ export class NeoKnowledgeGraph {
       attributes: input.attributes || {},
       confidence: input.confidence ?? 0.85,
       embedding: emb.vector,
+      embedding_model: emb.model,
+      embedding_dim: emb.dim,
     });
   }
 
@@ -90,9 +92,52 @@ export class NeoKnowledgeGraph {
       entities.push(ent);
     }
 
-    // Entity co-occurrence is not a semantic relationship. Do not fabricate graph edges.
-    // Relationships must be extracted with explicit evidence and validated by addRelationship().
-    return { entitiesAdded: entities.length, relationshipsAdded: 0 };
+    // Extract strictly grounded syntactic relationships from explicit subject-predicate-object clauses in text.
+    // Never invent speculative co_occurs_with edges.
+    let relationshipsAdded = 0;
+    const predicates: Array<{ pattern: RegExp; relationType: string }> = [
+      { pattern: /\buses\b/i, relationType: 'uses' },
+      { pattern: /\bruns on\b/i, relationType: 'runs_on' },
+      { pattern: /\bdepends on\b/i, relationType: 'depends_on' },
+      { pattern: /\bintegrates with\b/i, relationType: 'integrates_with' },
+      { pattern: /\bpowered by\b/i, relationType: 'powered_by' },
+      { pattern: /\bconnects to\b/i, relationType: 'connects_to' },
+      { pattern: /\breplaces\b/i, relationType: 'replaces' },
+    ];
+    const sentences = text.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean).slice(0, 40);
+    const seenPairs = new Set<string>();
+    for (const sentence of sentences) {
+      if (relationshipsAdded >= 6) break;
+      for (const a of entities) {
+        for (const b of entities) {
+          if (a.id === b.id) continue;
+          const escA = a.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const escB = b.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          for (const pred of predicates) {
+            const re = new RegExp(`\\b${escA}\\b[^.?!;]{0,24}${pred.pattern.source}[^.?!;]{0,24}\\b${escB}\\b`, 'i');
+            const pairKey = `${a.id}:${pred.relationType}:${b.id}`;
+            if (!seenPairs.has(pairKey) && re.test(sentence)) {
+              seenPairs.add(pairKey);
+              await this.addRelationship({
+                tenantId,
+                sourceEntityId: a.id,
+                targetEntityId: b.id,
+                relationType: pred.relationType,
+                properties: { evidence: sentence.slice(0, 240) },
+                sourceUrl: sourceUrl ?? null,
+                confidence: 0.78,
+              });
+              relationshipsAdded++;
+              break;
+            }
+          }
+          if (relationshipsAdded >= 6) break;
+        }
+        if (relationshipsAdded >= 6) break;
+      }
+    }
+
+    return { entitiesAdded: entities.length, relationshipsAdded };
   }
 
   async searchEntities(tenantId: string, query: string, limit = 10): Promise<Array<GraphEntityRecord & { score: number }>> {
@@ -103,7 +148,11 @@ export class NeoKnowledgeGraph {
     ]);
     return all
       .map((e) => {
-        const vecSim = e.embedding.length ? cosineSimilarity(emb.vector, e.embedding) : 0;
+        const compatibleSpace =
+          e.embedding.length > 0 &&
+          e.embedding.length === emb.vector.length &&
+          (!e.embedding_model || e.embedding_model === emb.model);
+        const vecSim = compatibleSpace ? cosineSimilarity(emb.vector, e.embedding) : 0;
         const nameMatch = e.name.toLowerCase().includes(query.toLowerCase()) ? 0.45 : 0;
         return { ...e, embedding: [], score: Number((vecSim + nameMatch).toFixed(4)) };
       })

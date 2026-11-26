@@ -75,6 +75,12 @@ export class NeoClient {
   }
 
   // System
+  health() {
+    return this.request<Record<string, unknown>>('/api/v1/health');
+  }
+  ready() {
+    return this.request<{ ready: boolean; status: string; storage: string; sandboxMode: string }>('/api/v1/ready');
+  }
   status() {
     return this.request<Record<string, unknown>>('/api/v1/status');
   }
@@ -140,9 +146,12 @@ export class NeoClient {
     return this.request<Record<string, unknown>>('/api/v1/verify', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  // Autonomous Durable Tasks
+  // Autonomous Durable Tasks & Objectives
   createTask(input: { goal: string; autonomy?: 'low' | 'balanced' | 'high'; priority?: string }) {
     return this.request<{ task: Record<string, unknown> }>('/api/v1/tasks', { method: 'POST', body: JSON.stringify(input) });
+  }
+  listTasks(limit = 30) {
+    return this.request<{ tasks: unknown[] }>(`/api/v1/tasks?limit=${limit}`);
   }
   getTask(taskId: string) {
     return this.request<{ task: Record<string, unknown>; steps: unknown[]; events: unknown[] }>(`/api/v1/tasks/${encodeURIComponent(taskId)}`);
@@ -150,6 +159,17 @@ export class NeoClient {
   cancelTask(taskId: string) {
     return this.request<{ task: Record<string, unknown> }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST', body: '{}' });
   }
+  resumeTask(taskId: string) {
+    return this.request<{ task: Record<string, unknown> }>(`/api/v1/tasks/${encodeURIComponent(taskId)}/resume`, { method: 'POST', body: '{}' });
+  }
+
+  objectives = {
+    list: (limit = 30) => this.request<{ objectives: unknown[] }>(`/api/v1/objectives?limit=${limit}`),
+    create: (input: { title: string; description: string; category?: string; priority_score?: number; success_criteria?: string }) =>
+      this.request<{ objective: Record<string, unknown> }>('/api/v1/objectives', { method: 'POST', body: JSON.stringify(input) }),
+    update: (id: string, patch: { status?: 'active' | 'paused' | 'achieved' | 'abandoned' | 'blocked'; progress_pct?: number; priority_score?: number }) =>
+      this.request<{ objective: Record<string, unknown> }>(`/api/v1/objectives/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  };
 
   // Memory & Knowledge Graph
   memory = {
@@ -160,7 +180,16 @@ export class NeoClient {
       if (type) params.set('type', type);
       return this.request<{ query: string; matches: unknown[] }>(`/api/v1/memory/search?${params.toString()}`);
     },
+    update: (id: string, patch: { title?: string; content?: string; topic?: string; importance_score?: number; confidence_score?: number }) =>
+      this.request<{ memory: Record<string, unknown> }>(`/api/v1/memory/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+    delete: (id: string, hard = false) =>
+      this.request<{ deleted: boolean; hard: boolean }>(`/api/v1/memory/${encodeURIComponent(id)}${hard ? '?hard=true' : ''}`, { method: 'DELETE' }),
     consolidate: () => this.request<Record<string, unknown>>('/api/v1/memory/consolidate', { method: 'POST', body: '{}' }),
+    reindex: (opts?: { force?: boolean; limit?: number }) =>
+      this.request<{ totalScanned: number; reindexed: number; targetModel: string; targetDim: number }>('/api/v1/memory/reindex', {
+        method: 'POST',
+        body: JSON.stringify(opts || {}),
+      }),
     graphEntities: (q?: string) =>
       this.request<{ entities: unknown[]; relationships: unknown[] }>(`/api/v1/graph/entities${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   };
@@ -182,12 +211,20 @@ export class NeoClient {
 
   models = {
     list: () => this.request<{ models: unknown[]; compatibility: unknown[]; evaluations: unknown[]; hardware: unknown }>('/api/v1/models'),
+    register: (input: { id: string; name: string; runtime: 'embedded' | 'ollama' | 'vllm' | 'tensorrt-llm' | 'transformers'; architecture: string; source_repo: string; license: string }) =>
+      this.request<{ model: Record<string, unknown> }>('/api/v1/models', { method: 'POST', body: JSON.stringify(input) }),
     evaluate: (modelId = 'neo-embedded-core-v1') =>
       this.request<{ evaluation: Record<string, unknown> }>('/api/v1/models/evaluate', { method: 'POST', body: JSON.stringify({ modelId }) }),
     install: (modelId: string) =>
       this.request<{ ok: boolean; message: string }>('/api/v1/models/install', { method: 'POST', body: JSON.stringify({ modelId }) }),
+    verify: (modelId: string) =>
+      this.request<{ ready: boolean; message: string }>(`/api/v1/models/${encodeURIComponent(modelId)}/verify`, { method: 'POST', body: '{}' }),
     activate: (modelId: string, role = 'primary') =>
       this.request<{ deployment: Record<string, unknown> }>('/api/v1/models/activate', { method: 'POST', body: JSON.stringify({ modelId, role }) }),
+    rollback: (role = 'primary') =>
+      this.request<{ deployment: Record<string, unknown> }>('/api/v1/models/rollback', { method: 'POST', body: JSON.stringify({ role }) }),
+    delete: (modelId: string) =>
+      this.request<Record<string, unknown>>(`/api/v1/models/${encodeURIComponent(modelId)}`, { method: 'DELETE' }),
   };
 
   // Business, Engineering & API Forge

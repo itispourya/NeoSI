@@ -4,6 +4,7 @@ import { cosineSimilarity } from '../db/vector.ts';
 import { embeddingEngine } from './embeddings.ts';
 import { neoInferenceEngine } from './registry.ts';
 import type { RuntimeKind } from './types.ts';
+import { runTestsInSandbox } from '../sandbox/runner.ts';
 
 export const BENCHMARK_SUITE_VERSION = 'neo-bench-2026.2-strict-target';
 
@@ -54,8 +55,18 @@ export const NEO_BENCHMARK_CASES: BenchmarkCase[] = [
     evaluate: (out) => {
       try {
         const parsed = JSON.parse(out) as { code?: string; tests?: string };
-        const ok = Boolean(parsed.code?.includes('function handle') && parsed.tests?.includes('test('));
-        return { passed: ok, score: ok ? 100 : 30, reason: ok ? 'Valid handle(input) & test() emitted' : 'Missing handle() or test()' };
+        if (!parsed.code?.includes('function handle') || !parsed.tests?.includes('test(')) {
+          return { passed: false, score: 25, reason: 'Missing handle() or test()' };
+        }
+        const report = runTestsInSandbox(parsed.code, parsed.tests, 2500);
+        const passed = report.passed >= 1 && report.failed === 0;
+        return {
+          passed,
+          score: passed ? 100 : 20,
+          reason: passed
+            ? `Executed in sandbox: ${report.passed}/${report.total} unit assertions passed (${report.isolation})`
+            : `Sandbox execution failed: ${report.details.join('; ')}`,
+        };
       } catch {
         return { passed: false, score: 0, reason: 'Invalid JSON response' };
       }
@@ -92,9 +103,22 @@ export const NEO_BENCHMARK_CASES: BenchmarkCase[] = [
     prompt: 'Requirement: Compute VAT invoice total from amount and taxRate',
     evaluate: (out) => {
       try {
-        const parsed = JSON.parse(out) as { slug?: string; inputSchema?: unknown; handlerCode?: string };
-        const ok = Boolean(parsed.slug && parsed.inputSchema && parsed.handlerCode);
-        return { passed: ok, score: ok ? 100 : 0, reason: ok ? 'Valid tool schema & handler synthesized' : 'Incomplete tool spec' };
+        const parsed = JSON.parse(out) as { slug?: string; inputSchema?: unknown; handlerCode?: string; testCode?: string };
+        if (!parsed.slug || !parsed.inputSchema || !parsed.handlerCode) {
+          return { passed: false, score: 0, reason: 'Incomplete tool spec' };
+        }
+        if (!parsed.testCode) {
+          return { passed: false, score: 40, reason: 'Tool handler synthesized without runnable unit tests' };
+        }
+        const report = runTestsInSandbox(parsed.handlerCode, parsed.testCode, 2500);
+        const passed = report.passed >= 1 && report.failed === 0;
+        return {
+          passed,
+          score: passed ? 100 : 25,
+          reason: passed
+            ? `Tool handler & schema verified in sandbox (${report.passed}/${report.total} passed)`
+            : `Tool handler failed sandbox verification: ${report.details.join('; ')}`,
+        };
       } catch {
         return { passed: false, score: 0, reason: 'Invalid tool JSON' };
       }

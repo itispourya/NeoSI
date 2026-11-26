@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildPostgresLexicalFilter, buildPostgresMemoryFilters } from './postgres.ts';
+import {
+  buildPostgresLexicalFilter,
+  buildPostgresMemoryFilters,
+  buildPostgresUpdateTaskIfStatusQuery,
+} from './postgres.ts';
 
 test('PostgreSQL memory filters bind tenant and valid-time parameters', () => {
   const filters = buildPostgresMemoryFilters({
@@ -45,4 +49,23 @@ test('PostgreSQL lexical filter handles duplicate and empty terms safely', () =>
 
 test('PostgreSQL lexical filter rejects invalid parameter indices', () => {
   assert.throws(() => buildPostgresLexicalFilter(['term'], 0), /start at 1/);
+});
+
+test('PostgreSQL updateTaskIfStatus emits valid $N positional placeholders', () => {
+  const query = buildPostgresUpdateTaskIfStatusQuery(
+    'task-1',
+    'tenant-1',
+    ['planning', 'running'],
+    {
+      status: 'completed',
+      error: null,
+      result: { answer: 'done' },
+    }
+  );
+  assert.ok(query);
+  assert.equal(
+    query.sql,
+    'UPDATE tasks SET status = $1, error = $2, result = $3, updated_at = NOW() WHERE id = $4 AND tenant_id = $5 AND status = ANY($6::text[]) RETURNING *'
+  );
+  assert.deepEqual(query.values, ['completed', null, JSON.stringify({ answer: 'done' }), 'task-1', 'tenant-1', ['planning', 'running']]);
 });
