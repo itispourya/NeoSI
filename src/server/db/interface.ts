@@ -199,6 +199,14 @@ export interface NeoDatabase {
       Pick<TaskRecord, 'status' | 'plan' | 'checkpoint' | 'result' | 'verification' | 'error' | 'usage' | 'loop_signature_counts' | 'completed_at'>
     >
   ): Promise<TaskRecord | null>;
+  updateTaskIfStatus(
+    id: string,
+    tenantId: string,
+    expectedStatuses: TaskStatus[],
+    patch: Partial<
+      Pick<TaskRecord, 'status' | 'plan' | 'checkpoint' | 'result' | 'verification' | 'error' | 'usage' | 'loop_signature_counts' | 'completed_at'>
+    >
+  ): Promise<TaskRecord | null>;
   upsertTaskStep(input: Omit<TaskStepRecord, 'id'> & { id?: string }): Promise<TaskStepRecord>;
   listTaskSteps(taskId: string, tenantId: string): Promise<TaskStepRecord[]>;
   appendTaskEvent(input: Omit<TaskEventRecord, 'id' | 'created_at'>): Promise<TaskEventRecord>;
