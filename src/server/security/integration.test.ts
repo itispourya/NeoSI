@@ -74,6 +74,10 @@ test('Fail-closed auth blocks unauthenticated admin/gateway access and spoofed X
   assert.equal(v1NoAuth.status, 401);
 
   // Claim admin passcode properly
+  const authStatus = await fetch(`${baseUrl}/api/admin/auth/status`);
+  const authStatusData = (await authStatus.json()) as { claimAllowed: boolean };
+  assert.equal(authStatusData.claimAllowed, true);
+
   const claimRes = await fetch(`${baseUrl}/api/admin/auth/claim`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

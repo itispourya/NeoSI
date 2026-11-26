@@ -20,14 +20,19 @@ export default function App() {
   const [lockSource, setLockSource] = useState<'env' | 'claimed' | 'unclaimed' | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
   const [passcode, setPasscode] = useState('');
+  const [setupToken, setSetupToken] = useState('');
+  const [claimAllowed, setClaimAllowed] = useState(true);
+  const [setupTokenRequired, setSetupTokenRequired] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const status = await apiFetch<{ locked: boolean; source: 'env' | 'claimed' | 'unclaimed' }>('/api/admin/auth/status');
+      const status = await apiFetch<{ locked: boolean; source: 'env' | 'claimed' | 'unclaimed'; claimAllowed?: boolean; setupTokenRequired?: boolean }>('/api/admin/auth/status');
       setLockSource(status.source);
+      setClaimAllowed(status.claimAllowed ?? status.source === 'unclaimed');
+      setSetupTokenRequired(Boolean(status.setupTokenRequired));
 
       if (!getAdminToken()) {
         setAuthRequired(true);
@@ -62,10 +67,11 @@ export default function App() {
       const endpoint = lockSource === 'unclaimed' ? '/api/admin/auth/claim' : '/api/admin/auth/login';
       const res = await apiFetch<{ token: string }>(endpoint, {
         method: 'POST',
-        body: JSON.stringify({ passcode }),
+        body: JSON.stringify({ passcode, ...(endpoint.endsWith('/claim') ? { setupToken } : {}) }),
       });
       setAdminToken(res.token);
       setPasscode('');
+      setSetupToken('');
       setAuthRequired(false);
       await loadOverview();
     } catch (err) {
@@ -90,7 +96,7 @@ export default function App() {
                 {isClaim ? 'Initialize Neo Admin Passcode' : 'Neo Control Plane'}
               </h1>
               <p className="text-[11px] font-mono text-slate-400">
-                {isClaim ? 'First-time console setup (12–256 characters)' : 'Enter admin passcode to authenticate'}
+                {isClaim ? (claimAllowed ? 'First-time console setup (12–256 characters)' : 'Production setup is disabled until the administrator configures a setup token.') : 'Enter admin passcode to authenticate'}
               </p>
             </div>
           </div>
@@ -106,10 +112,26 @@ export default function App() {
             maxLength={256}
             className="w-full px-3 py-2 text-sm bg-[#0B0F17] border border-slate-700 rounded text-slate-100 focus:outline-none focus:border-blue-500"
           />
+          {isClaim && setupTokenRequired && claimAllowed && (
+            <input
+              type="password"
+              value={setupToken}
+              onChange={(e) => setSetupToken(e.target.value)}
+              placeholder="Production setup token (32+ bytes)"
+              aria-label="Admin setup token"
+              required
+              minLength={32}
+              maxLength={256}
+              autoComplete="off"
+              className="w-full px-3 py-2 text-sm bg-[#0B0F17] border border-slate-700 rounded text-slate-100 focus:outline-none focus:border-blue-500"
+            />
+          )}
+          {isClaim && !claimAllowed && <p className="text-xs text-amber-300">Set NEO_ADMIN_SETUP_TOKEN (32+ bytes) or NEO_ADMIN_PASSCODE in the server environment before initial production setup.</p>}
           {error && <p className="text-xs text-rose-400">{error}</p>}
           <button
             type="submit"
-            className="w-full px-4 py-2 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-500 whitespace-nowrap"
+            disabled={isClaim && !claimAllowed}
+            className="w-full px-4 py-2 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
           >
             {isClaim ? 'Claim Passcode & Unlock' : 'Unlock Console'}
           </button>

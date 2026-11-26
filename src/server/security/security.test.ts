@@ -9,7 +9,15 @@ import {
   validateExternalUrl,
   verifyPasscode,
   verifyWebhookSignature,
+  verifyAdminSetupToken,
 } from './crypto';
+
+test('Production admin setup token validation is fail-closed', () => {
+  assert.equal(verifyAdminSetupToken('a'.repeat(32), 'a'.repeat(32)), true);
+  assert.equal(verifyAdminSetupToken('a'.repeat(32), 'b'.repeat(32)), false);
+  assert.equal(verifyAdminSetupToken('short', 'a'.repeat(32)), false);
+  assert.equal(verifyAdminSetupToken('', 'a'.repeat(32)), false);
+});
 
 test('HMAC webhook signing verifies valid signatures and rejects tampered payloads', () => {
   const secret = 'test-neos-webhook-secret';

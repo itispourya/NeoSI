@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { getConfiguredSubsystems } from '../config/env.ts';
+import { env, getConfiguredSubsystems } from '../config/env.ts';
 import { getDb } from '../db/adapter.ts';
 import { indexWorkspaceCodebase } from '../engineer/repoIndex.ts';
 import { inspectHardware } from '../inference/hardware.ts';
@@ -24,7 +24,11 @@ export const adminRouter = Router();
 
 adminRouter.get('/auth/status', asyncHandler(async (_req, res) => {
   const lockState = await getAdminLockState();
-  res.json(lockState);
+  res.json({
+    ...lockState,
+    claimAllowed: lockState.source === 'unclaimed' && (env.nodeEnv !== 'production' || Boolean(env.adminSetupToken)),
+    setupTokenRequired: lockState.source === 'unclaimed' && env.nodeEnv === 'production' && Boolean(env.adminSetupToken),
+  });
 }));
 
 adminRouter.post('/auth/claim', asyncHandler(async (req, res) => {
@@ -34,7 +38,8 @@ adminRouter.post('/auth/claim', asyncHandler(async (req, res) => {
     return res.status(429).json({ error: 'Too many admin setup attempts. Try again later.' });
   }
   const passcode = String(req.body?.passcode || '');
-  const result = await claimInitialAdminPasscode(passcode);
+  const setupToken = String(req.body?.setupToken || '');
+  const result = await claimInitialAdminPasscode(passcode, setupToken);
   if (!result.ok) {
     return res.status(400).json({ error: result.error });
   }

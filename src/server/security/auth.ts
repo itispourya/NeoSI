@@ -98,9 +98,19 @@ export async function verifyAdminCredential(passcode: string): Promise<boolean> 
   return verifyPasscode(passcode, claimedHash);
 }
 
-export async function claimInitialAdminPasscode(passcode: string): Promise<{ ok: boolean; error?: string }> {
+export function verifyAdminSetupToken(provided: string, expected: string): boolean {
+  if (!provided || !expected) return false;
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+export async function claimInitialAdminPasscode(passcode: string, setupToken = ''): Promise<{ ok: boolean; error?: string }> {
   const state = await getAdminLockState();
   if (state.locked) return { ok: false, error: 'Admin access is already configured and locked.' };
+  if (env.nodeEnv === 'production' && !verifyAdminSetupToken(setupToken, env.adminSetupToken)) {
+    return { ok: false, error: env.adminSetupToken ? 'Valid production setup token is required.' : 'Initial production admin claim is disabled. Configure NEO_ADMIN_SETUP_TOKEN or NEO_ADMIN_PASSCODE.' };
+  }
   if (!passcode || passcode.length < 12 || passcode.length > 256) {
     return { ok: false, error: 'Passcode must be between 12 and 256 characters.' };
   }

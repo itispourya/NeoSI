@@ -48,8 +48,16 @@ if (sandboxMode !== rawSandboxMode) {
   console.warn(`[Neo Env Warning] Unsupported NEO_SANDBOX_MODE "${rawSandboxMode}"; falling back to "subprocess".`);
 }
 
+const configuredAdminPasscode = stripQuotes(process.env.NEO_ADMIN_PASSCODE || process.env.ADMIN_PASSCODE);
+const configuredAdminSetupToken = stripQuotes(process.env.NEO_ADMIN_SETUP_TOKEN);
 if (nodeEnv === 'production' && Buffer.byteLength(configuredSessionSecret, 'utf8') < 32) {
-  console.warn('[Neo Security Warning] NEO_SESSION_SECRET is missing or < 32 bytes in production; using ephemeral 256-bit session secret.');
+  throw new Error('Production requires NEO_SESSION_SECRET with at least 32 bytes. Generate one with: openssl rand -hex 32');
+}
+if (nodeEnv === 'production' && configuredAdminPasscode && configuredAdminPasscode.length < 12) {
+  throw new Error('Production NEO_ADMIN_PASSCODE must be at least 12 characters.');
+}
+if (configuredAdminSetupToken && Buffer.byteLength(configuredAdminSetupToken, 'utf8') < 32) {
+  throw new Error('NEO_ADMIN_SETUP_TOKEN must be at least 32 bytes.');
 }
 
 export type RuntimeBackendKind = 'auto' | 'vllm' | 'ollama' | 'tensorrt-llm' | 'transformers' | 'embedded';
@@ -91,7 +99,8 @@ export const env = {
   schedulerTickMs: Number(process.env.NEO_SCHEDULER_TICK_MS || 60_000),
 
   // Security Controls (fail-closed defaults)
-  adminPasscode: process.env.NEO_ADMIN_PASSCODE || process.env.ADMIN_PASSCODE || '',
+  adminPasscode: configuredAdminPasscode,
+  adminSetupToken: configuredAdminSetupToken,
   webhookSecret: process.env.NEOS_WEBHOOK_SECRET || '',
   sessionSecret: configuredSessionSecret || EPHEMERAL_SESSION_SECRET,
   corsAllowedOrigins: (process.env.NEO_CORS_ORIGINS || '')

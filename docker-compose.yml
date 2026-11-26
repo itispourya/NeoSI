@@ -23,6 +23,11 @@ services:
       - "127.0.0.1:6379:6379"
     volumes:
       - neo_redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   ollama:
     image: ollama/ollama:latest
@@ -48,8 +53,16 @@ services:
 
   neo-core:
     build: .
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
     ports:
-      - "3000:3000"
+      - "127.0.0.1:${NEO_PORT:-3000}:3000"
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -66,7 +79,7 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - neo_data:/app/data
 

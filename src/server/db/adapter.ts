@@ -11,7 +11,7 @@ let initPromise: Promise<NeoDatabase> | null = null;
 export async function getDb(): Promise<NeoDatabase> {
   if (dbInstance) return dbInstance;
   if (!initPromise) {
-    initPromise = (async () => {
+    const pending = (async () => {
       const instance: NeoDatabase = env.databaseUrl
         ? new PostgresNeoDatabase(env.databaseUrl)
         : new SqliteNeoDatabase(env.sqliteDbPath);
@@ -19,6 +19,11 @@ export async function getDb(): Promise<NeoDatabase> {
       dbInstance = instance;
       return instance;
     })();
+    initPromise = pending;
+    // Retry after transient init errors instead of permanently caching a rejected promise.
+    void pending.catch(() => {
+      if (initPromise === pending) initPromise = null;
+    });
   }
   return initPromise;
 }

@@ -181,12 +181,19 @@ export class NeoToolRegistry {
     }
 
     try {
-      const result = await Promise.race([
-        tool.execute(parsed.data, ctx),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Tool '${toolId}' timed out after ${tool.timeoutMs}ms`)), tool.timeoutMs)
-        ),
-      ]);
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`Tool '${toolId}' timed out after ${tool.timeoutMs}ms`)),
+          tool.timeoutMs
+        );
+      });
+      let result: Record<string, unknown>;
+      try {
+        result = await Promise.race([tool.execute(parsed.data, ctx), timeoutPromise]);
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      }
       const durationMs = Math.max(1, Date.now() - start);
       await db.recordToolExecution({
         tenant_id: ctx.tenantId,
