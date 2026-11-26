@@ -14,6 +14,7 @@ import { scheduleReflection } from '../knowledge/reflection.ts';
 import { executePromotedModule, generateSovereignLocalResponse } from '../neo/sovereignEngine.ts';
 import { requireApiGatewayAuth } from '../security/auth.ts';
 import { redactPII, redactUnknownObject, safeExternalFetch, signWebhookPayload, validateExternalUrlAsync } from '../security/crypto.ts';
+import { sanitizeUntrustedContent } from '../security/promptGuard.ts';
 
 export const coreRouter = Router();
 
