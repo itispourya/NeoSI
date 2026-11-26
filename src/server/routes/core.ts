@@ -197,7 +197,7 @@ coreRouter.post('/chat/stream', requireApiGatewayAuth('write'), async (req, res)
       .join('\n');
 
     const prompt = [
-      safeContext ? `Active Neos Workspace Context:\n${sanitizeUntrustedContent(JSON.stringify(safeContext, null, 2).slice(0, 4000), 'workspace_context').wrappedData` : '',
+      safeContext ? `Active Neos Workspace Context:\n${sanitizeUntrustedContent(JSON.stringify(safeContext, null, 2).slice(0, 4000), 'workspace_context').wrappedData}` : '',
       historySnippet ? `Conversation History:\n${sanitizeUntrustedContent(historySnippet, 'conversation_history').wrappedData` : '',
       ragPrompt ? `Retrieved Long-Term Memory & Skills:\n${ragPrompt}` : '',
       `User Request:\n${rawMessage}`,
