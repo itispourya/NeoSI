@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { verifyAdminSetupToken } from './auth.ts';
 import assert from 'node:assert/strict';
 import {
   generateScopedApiKey,
@@ -9,7 +10,6 @@ import {
   validateExternalUrl,
   verifyPasscode,
   verifyWebhookSignature,
-  verifyAdminSetupToken,
 } from './crypto';
 
 test('Production admin setup token validation is fail-closed', () => {
