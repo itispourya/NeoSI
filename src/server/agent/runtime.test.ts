@@ -177,6 +177,59 @@ test('Durable AgentRuntime persists steps, executes tools, cancels cleanly, and 
   assert.equal(afterRecovery?.status, 'completed');
 });
 
+test('Agent execution never escalates beyond the scopes stored at task creation', async () => {
+  const task = await agentRuntime.createAndStartTask({
+    tenantId: 'global',
+    actor: 'scope-regression',
+    goal: 'Inspect code and run the requested workspace operation',
+    scopes: ['read'],
+    deferExecution: true,
+  });
+  const db = await getDb();
+  const steps = await db.listTaskSteps(task.id, 'global');
+  const candidate = steps.find((step) => step.tool_id === 'workspace_list_files');
+  assert.ok(candidate, 'deterministic code-inspection plan should contain workspace_list_files');
+  await db.upsertTaskStep({
+    ...candidate!,
+    action_type: 'tool_call',
+    tool_id: 'sandbox_execute_js',
+    input: { code: 'function handle(input) { return input; }', input: { value: 1 } },
+  });
+
+  const finished = await agentRuntime.executeTaskLoop(task.id, 'global', 'scope-regression', ['read', 'write']);
+  const finalSteps = await db.listTaskSteps(task.id, 'global');
+  const deniedStep = finalSteps.find((step) => step.step_index === candidate!.step_index);
+  assert.equal(deniedStep?.status, 'failed');
+  assert.match(deniedStep?.error || '', /Permission denied/i);
+  assert.notEqual(finished?.status, 'completed');
+  assert.deepEqual(finished?.checkpoint.executionScopes, ['read']);
+});
+
+test('atomic task transitions prevent late completion from overwriting cancellation', async () => {
+  const task = await agentRuntime.createAndStartTask({
+    tenantId: 'global',
+    actor: 'cancel-race-test',
+    goal: 'Check atomic task status transitions',
+    deferExecution: true,
+  });
+  const db = await getDb();
+  const claimed = await db.updateTaskIfStatus(task.id, 'global', ['planning'], { status: 'running' });
+  assert.equal(claimed?.status, 'running');
+
+  const cancelled = await db.updateTaskIfStatus(task.id, 'global', ['running'], {
+    status: 'cancelled',
+    completed_at: new Date().toISOString(),
+  });
+  assert.equal(cancelled?.status, 'cancelled');
+
+  const lateCompletion = await db.updateTaskIfStatus(task.id, 'global', ['running'], {
+    status: 'completed',
+    result: { answer: 'late' },
+  });
+  assert.equal(lateCompletion, null);
+  assert.equal((await db.getTaskById(task.id, 'global'))?.status, 'cancelled');
+});
+
 test('ModelRegistry checks hardware/licenses & Layer A/C/D evolution run end-to-end', async () => {
   await assert.rejects(
     () =>
