@@ -45,7 +45,7 @@ import type {
   UpgradeStatus,
 } from './schema.ts';
 import { seedInitialData } from './seed.ts';
-import { computeBm25Scores, computeTemporalDecay, hybridRerank } from './vector.ts';
+import { computeBm25Scores, computeTemporalDecay, hybridRerank, tokenizeMultilingual } from './vector.ts';
 
 function toPgVectorLiteral(vector: number[]): string | null {
   if (!Array.isArray(vector) || vector.length === 0) return null;
@@ -354,6 +354,8 @@ export class PostgresNeoDatabase implements NeoDatabase {
       idx++;
     }
 
+    const baseClauses = [...clauses];
+    const baseParams = [...params];
     let rows: Record<string, unknown>[];
     if (canVector && queryVectorLiteral) {
       params.unshift(queryVectorLiteral);
@@ -382,11 +384,37 @@ export class PostgresNeoDatabase implements NeoDatabase {
       rows = res.rows;
     }
 
+    const queryTerms = opts?.queryText
+      ? Array.from(new Set(tokenizeMultilingual(opts.queryText).filter((term) => term.length >= 2))).slice(0, 8)
+      : [];
+    if (queryTerms.length > 0) {
+      const lexicalClauses = [...baseClauses];
+      const lexicalParams: unknown[] = [...baseParams];
+      const tokenClauses = queryTerms.map((term) => {
+        const parameter = lexicalParams.length + 1;
+        lexicalParams.push(`%${term}%`);
+        return `(topic ILIKE ${parameter} OR title ILIKE ${parameter} OR content ILIKE ${parameter})`;
+      });
+      lexicalClauses.push(`(${tokenClauses.join(' OR ')})`);
+      lexicalParams.push(200);
+      const limitParameter = lexicalParams.length;
+      const lexicalResult = await this.pool.query(
+        `SELECT id, tenant_id, memory_type, topic, title, content, structured_facts, source_url, reliability_score, freshness_score, importance_score, confidence_score, epistemic_status, retention_policy, valid_from, valid_to, superseded_by, version, deleted_at, last_accessed_at, embedding_model, embedding_dim, created_at, 0 AS similarity
+         FROM memories WHERE ${lexicalClauses.join(' AND ')} ORDER BY created_at DESC LIMIT ${limitParameter}`,
+        lexicalParams
+      );
+      const candidateMap = new Map(rows.map((row) => [String(row.id), row]));
+      for (const row of lexicalResult.rows as Record<string, unknown>[]) {
+        if (!candidateMap.has(String(row.id))) candidateMap.set(String(row.id), row);
+      }
+      rows = Array.from(candidateMap.values());
+    }
+
     if (rows.length === 0) return [];
     const bm25 = opts?.queryText
       ? computeBm25Scores(
           opts.queryText,
-          rows.map((r) => `${r.topic} ${r.title} ${r.content}`)
+          rows.map((row) => `${row.topic} ${row.title} ${row.content}`)
         )
       : rows.map(() => 0);
     const ranked = hybridRerank(
