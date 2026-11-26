@@ -91,7 +91,13 @@ export async function runMemoryConsolidation(tenantId = 'global'): Promise<Conso
       const a = semantic[i];
       const b = semantic[j];
       if (a.tenant_id !== b.tenant_id || a.topic !== b.topic) continue;
-      if (!a.embedding.length || !b.embedding.length) continue;
+      if (
+        !a.embedding.length ||
+        !b.embedding.length ||
+        a.embedding_model !== b.embedding_model ||
+        a.embedding_dim !== b.embedding_dim ||
+        a.embedding.length !== b.embedding.length
+      ) continue;
       const sim = cosineSimilarity(a.embedding, b.embedding);
       if (sim > 0.72) {
         const aNeg = /\b(not|never|forbidden|blocked|false|imbalanced)\b/i.test(a.content);
