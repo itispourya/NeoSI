@@ -184,7 +184,7 @@ test('POST /v1/chat/completions and /api/v1/chat/completions support probes, mul
     messages: [{ role: 'user', content: 'مرحبا من أنت؟' }],
   });
   assert.equal(arCompletion.object, 'chat.completion');
-  assert.ok(/[\u0600-\u06FF]/.test(arCompletion.choices[0].message.content));
+  assert.ok(/[\u0600-\u06FF]/.test(arCompletion.choices[0].message.content ?? ''));
 
   const neosSdk = new NeoAiClient({ baseUrl, apiKey: writeKey });
   const nlCompletion = await neosSdk.chatCompletions({
@@ -193,7 +193,7 @@ test('POST /v1/chat/completions and /api/v1/chat/completions support probes, mul
     workspaceContext: { ledgerBalanced: true, monthlyRevenue: 45000 },
   });
   assert.equal(nlCompletion.object, 'chat.completion');
-  assert.ok(nlCompletion.choices[0].message.content.length > 10);
+  assert.ok((nlCompletion.choices[0].message.content ?? '').length > 10);
 });
 
 test('POST /v1/chat/completions supports OpenAI SSE streaming chunks and [DONE] terminator', async () => {

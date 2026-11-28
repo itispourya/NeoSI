@@ -306,6 +306,9 @@ export interface KnowledgeSourceRecord {
   };
   content_hash: string;
   injection_flagged: boolean;
+  etag?: string | null;
+  last_modified?: string | null;
+  review_at?: string | null;
   created_at: string;
 }
 
@@ -413,6 +416,8 @@ export interface ModelRecord {
     avgLatencyMs?: number;
     tokensPerSec?: number;
     calls?: number;
+    costPer1kInputUsd?: number;
+    costPer1kOutputUsd?: number;
   };
   last_validated_at: string | null;
   created_at: string;
@@ -503,4 +508,88 @@ export interface ObjectiveRecord {
   last_evaluated_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type KnowledgePolicyRuleType = 'trusted_domain' | 'blocked_domain' | 'feed_source';
+
+export interface KnowledgePolicyRecord {
+  id: string;
+  tenant_id: string;
+  rule_type: KnowledgePolicyRuleType;
+  pattern: string;
+  source_kind: string;
+  min_reliability: number;
+  revalidation_hours: number;
+  etag: string | null;
+  last_modified: string | null;
+  last_fetched_at: string | null;
+  enabled: boolean;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface BehavioralPolicyConfig {
+  ragTopK: number;
+  minReliability: number;
+  hybridVectorWeight: number;
+  hybridLexicalWeight: number;
+  preferLocalForPrivate: boolean;
+  preferFastForSimple: boolean;
+  maxPlanSteps: number;
+  plannerRetryBudget: number;
+  systemDirectiveSuffix: string;
+  extraLanguages: Record<string, { label: string; directive: string; rtl?: boolean }>;
+}
+
+export type BehavioralPolicyStatus = 'active' | 'candidate' | 'rolled_back' | 'rejected';
+
+export interface BehavioralPolicyRecord {
+  id: string;
+  version: number;
+  title: string;
+  status: BehavioralPolicyStatus;
+  config: BehavioralPolicyConfig;
+  baseline_metrics: Record<string, unknown>;
+  candidate_metrics: Record<string, unknown>;
+  hypothesis: string;
+  created_at: string;
+  promoted_at: string | null;
+}
+
+export interface NeosCapabilityRecord {
+  id: string;
+  tenant_id: string;
+  module_name: string;
+  capability_id: string;
+  title: string;
+  description: string;
+  endpoint_url: string | null;
+  required_scopes: string[];
+  risk_level: 'low' | 'medium' | 'high';
+  requires_confirmation: boolean;
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
+  contract_version: string;
+  enabled: boolean;
+  last_synced_at: string;
+  created_at: string;
+}
+
+export type NeosApprovalStatus = 'pending' | 'approved' | 'rejected' | 'executed' | 'expired';
+
+export interface NeosApprovalRecord {
+  id: string;
+  tenant_id: string;
+  capability_id: string;
+  actor: string;
+  action_summary: string;
+  payload: Record<string, unknown>;
+  required_scopes: string[];
+  status: NeosApprovalStatus;
+  decision_by: string | null;
+  decision_note: string | null;
+  execution_result: Record<string, unknown> | null;
+  expires_at: string;
+  created_at: string;
+  decided_at: string | null;
 }

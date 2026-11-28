@@ -49,7 +49,8 @@ modelsRouter.get('/models', requireApiGatewayAuth('read'), asyncHandler(async (_
 
 modelsRouter.get('/models/health', requireApiGatewayAuth('read'), asyncHandler(async (_req, res) => {
   const [runtimes, hardware] = await Promise.all([neoInferenceEngine.listRuntimeHealth(), inspectHardware()]);
-  res.json({ runtimes, hardware });
+  const circuitBreakers = neoInferenceEngine.getCircuitBreakerStatuses();
+  res.json({ runtimes, hardware, circuitBreakers });
 }));
 
 const registerModelSchema = z.object({
@@ -65,6 +66,8 @@ const registerModelSchema = z.object({
   vram_gb: z.number().min(0).max(512).optional(),
   ram_gb: z.number().min(0).max(1024).optional(),
   roles: z.array(z.string()).optional(),
+  costPer1kInputUsd: z.number().min(0).max(10).optional(),
+  costPer1kOutputUsd: z.number().min(0).max(10).optional(),
 });
 
 modelsRouter.post('/models', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
@@ -76,6 +79,25 @@ modelsRouter.post('/models', requireAdminConsoleAuth, asyncHandler(async (req, r
   } catch (err) {
     return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
+}));
+
+const runtimeTestSchema = z.object({
+  runtime: z.enum(['embedded', 'ollama', 'vllm', 'tensorrt-llm', 'transformers', 'custom-llm']),
+  baseUrl: z.string().url().optional(),
+  apiKey: z.string().max(512).optional(),
+  modelId: z.string().max(160).optional(),
+});
+
+modelsRouter.post('/models/runtimes/test', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
+  const parsed = runtimeTestSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid runtime test request', issues: parsed.error.issues });
+  const result = await modelRegistry.testRuntimeConnection(parsed.data);
+  return res.status(result.ok ? 200 : 502).json(result);
+}));
+
+modelsRouter.post('/models/discover', requireAdminConsoleAuth, asyncHandler(async (_req, res) => {
+  const sync = await modelRegistry.syncDiscoveredModels();
+  return res.json(sync);
 }));
 
 modelsRouter.post('/models/install', requireAdminConsoleAuth, asyncHandler(async (req, res) => {

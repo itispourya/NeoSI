@@ -13,18 +13,25 @@ import type {
   ApiKeyRecord,
   AuditLogRecord,
   BackgroundJobRecord,
+  BehavioralPolicyRecord,
+  BehavioralPolicyStatus,
   ConversationRecord,
   DynamicApiRecord,
   EpistemicStatus,
   EvolutionExperimentRecord,
   GraphEntityRecord,
   GraphRelationshipRecord,
+  KnowledgePolicyRecord,
+  KnowledgePolicyRuleType,
   KnowledgeSourceRecord,
   LlmTelemetryRecord,
   MemoryRecord,
   MessageRecord,
   ModelEvaluationRecord,
   ModelRecord,
+  NeosApprovalRecord,
+  NeosApprovalStatus,
+  NeosCapabilityRecord,
   ObjectiveRecord,
   ObjectiveStatus,
   ResearchReportRecord,
@@ -154,7 +161,7 @@ export class PostgresNeoDatabase implements NeoDatabase {
   }
 
   async init(): Promise<void> {
-    for (const file of ['001_init.sql', '002_neo_cognitive_core.sql', '003_neo_upgrade.sql', '004_promoted_upgrade_status.sql', '005_variable_dimension_embeddings.sql']) {
+    for (const file of ['001_init.sql', '002_neo_cognitive_core.sql', '003_neo_upgrade.sql', '004_promoted_upgrade_status.sql', '005_variable_dimension_embeddings.sql', '006_intelligence_upgrade.sql']) {
       const migrationPath = path.resolve(process.cwd(), 'migrations', file);
       if (fs.existsSync(migrationPath)) {
         const sql = fs.readFileSync(migrationPath, 'utf8');
@@ -579,15 +586,15 @@ export class PostgresNeoDatabase implements NeoDatabase {
     const existing = await this.pool.query('SELECT id FROM knowledge_sources WHERE url = $1 AND tenant_id = $2', [input.url, input.tenant_id]);
     if (existing.rows[0]) {
       const { rows } = await this.pool.query(
-        `UPDATE knowledge_sources SET title = $1, source_type = $2, author = $3, published_at = $4, last_verified_at = $5, reliability_score = $6, quality_breakdown = $7, content_hash = $8, injection_flagged = $9 WHERE id = $10 RETURNING *`,
-        [input.title, input.source_type, input.author, input.published_at, input.last_verified_at, input.reliability_score, JSON.stringify(input.quality_breakdown), input.content_hash, input.injection_flagged, existing.rows[0].id]
+        `UPDATE knowledge_sources SET title = $1, source_type = $2, author = $3, published_at = $4, last_verified_at = $5, reliability_score = $6, quality_breakdown = $7, content_hash = $8, injection_flagged = $9, etag = $10, last_modified = $11, review_at = $12 WHERE id = $13 RETURNING *`,
+        [input.title, input.source_type, input.author, input.published_at, input.last_verified_at, input.reliability_score, JSON.stringify(input.quality_breakdown), input.content_hash, input.injection_flagged, input.etag ?? null, input.last_modified ?? null, input.review_at ?? null, existing.rows[0].id]
       );
       return rows[0];
     }
     const { rows } = await this.pool.query(
-      `INSERT INTO knowledge_sources (id, tenant_id, url, title, source_type, author, published_at, last_verified_at, reliability_score, quality_breakdown, content_hash, injection_flagged)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-      [uuidv4(), input.tenant_id, input.url, input.title, input.source_type, input.author, input.published_at, input.last_verified_at, input.reliability_score, JSON.stringify(input.quality_breakdown), input.content_hash, input.injection_flagged]
+      `INSERT INTO knowledge_sources (id, tenant_id, url, title, source_type, author, published_at, last_verified_at, reliability_score, quality_breakdown, content_hash, injection_flagged, etag, last_modified, review_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+      [uuidv4(), input.tenant_id, input.url, input.title, input.source_type, input.author, input.published_at, input.last_verified_at, input.reliability_score, JSON.stringify(input.quality_breakdown), input.content_hash, input.injection_flagged, input.etag ?? null, input.last_modified ?? null, input.review_at ?? null]
     );
     return rows[0];
   }
@@ -1259,5 +1266,164 @@ export class PostgresNeoDatabase implements NeoDatabase {
       [key, value]
     );
     return (result.rowCount ?? 0) === 1;
+  }
+
+  // --- Knowledge Policies ---
+  async listKnowledgePolicies(tenantId?: string, ruleType?: KnowledgePolicyRuleType): Promise<KnowledgePolicyRecord[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    let idx = 1;
+    if (tenantId) {
+      clauses.push(`(tenant_id = $${idx++} OR tenant_id = $${idx++})`);
+      params.push(tenantId, 'global');
+    }
+    if (ruleType) {
+      clauses.push(`rule_type = $${idx++}`);
+      params.push(ruleType);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const { rows } = await this.pool.query(`SELECT * FROM knowledge_policies ${where} ORDER BY created_at DESC`, params);
+    return rows;
+  }
+
+  async upsertKnowledgePolicy(input: Omit<KnowledgePolicyRecord, 'id' | 'created_at'>): Promise<KnowledgePolicyRecord> {
+    const existing = await this.pool.query(
+      'SELECT id FROM knowledge_policies WHERE tenant_id = $1 AND rule_type = $2 AND lower(pattern) = lower($3)',
+      [input.tenant_id, input.rule_type, input.pattern]
+    );
+    if (existing.rows[0]) {
+      const { rows } = await this.pool.query(
+        `UPDATE knowledge_policies SET source_kind = $1, min_reliability = $2, revalidation_hours = $3, etag = $4, last_modified = $5, last_fetched_at = $6, enabled = $7, metadata = $8 WHERE id = $9 RETURNING *`,
+        [input.source_kind, input.min_reliability, input.revalidation_hours, input.etag, input.last_modified, input.last_fetched_at, input.enabled, JSON.stringify(input.metadata || {}), existing.rows[0].id]
+      );
+      return rows[0];
+    }
+    const { rows } = await this.pool.query(
+      `INSERT INTO knowledge_policies (id, tenant_id, rule_type, pattern, source_kind, min_reliability, revalidation_hours, etag, last_modified, last_fetched_at, enabled, metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [uuidv4(), input.tenant_id, input.rule_type, input.pattern, input.source_kind, input.min_reliability, input.revalidation_hours, input.etag, input.last_modified, input.last_fetched_at, input.enabled, JSON.stringify(input.metadata || {})]
+    );
+    return rows[0];
+  }
+
+  async updateKnowledgePolicy(
+    id: string,
+    patch: Partial<Pick<KnowledgePolicyRecord, 'enabled' | 'min_reliability' | 'revalidation_hours' | 'etag' | 'last_modified' | 'last_fetched_at' | 'metadata'>>
+  ): Promise<KnowledgePolicyRecord | null> {
+    const curRes = await this.pool.query('SELECT * FROM knowledge_policies WHERE id = $1', [id]);
+    if (!curRes.rows[0]) return null;
+    const merged = { ...curRes.rows[0], ...patch };
+    const { rows } = await this.pool.query(
+      `UPDATE knowledge_policies SET enabled = $1, min_reliability = $2, revalidation_hours = $3, etag = $4, last_modified = $5, last_fetched_at = $6, metadata = $7 WHERE id = $8 RETURNING *`,
+      [merged.enabled, merged.min_reliability, merged.revalidation_hours, merged.etag, merged.last_modified, merged.last_fetched_at, JSON.stringify(merged.metadata || {}), id]
+    );
+    return rows[0] || null;
+  }
+
+  async deleteKnowledgePolicy(id: string): Promise<boolean> {
+    const res = await this.pool.query('DELETE FROM knowledge_policies WHERE id = $1', [id]);
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  // --- Behavioral Policies ---
+  async listBehavioralPolicies(limit = 20): Promise<BehavioralPolicyRecord[]> {
+    const { rows } = await this.pool.query('SELECT * FROM behavioral_policies ORDER BY version DESC LIMIT $1', [limit]);
+    return rows;
+  }
+
+  async getActiveBehavioralPolicy(): Promise<BehavioralPolicyRecord | null> {
+    const { rows } = await this.pool.query(`SELECT * FROM behavioral_policies WHERE status = 'active' ORDER BY version DESC LIMIT 1`);
+    return rows[0] || null;
+  }
+
+  async createBehavioralPolicy(input: Omit<BehavioralPolicyRecord, 'id' | 'created_at'>): Promise<BehavioralPolicyRecord> {
+    if (input.status === 'active') {
+      await this.pool.query(`UPDATE behavioral_policies SET status = 'rolled_back' WHERE status = 'active'`);
+    }
+    const { rows } = await this.pool.query(
+      `INSERT INTO behavioral_policies (id, version, title, status, config, baseline_metrics, candidate_metrics, hypothesis, promoted_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [uuidv4(), input.version, input.title, input.status, JSON.stringify(input.config), JSON.stringify(input.baseline_metrics), JSON.stringify(input.candidate_metrics), input.hypothesis, input.promoted_at]
+    );
+    return rows[0];
+  }
+
+  async updateBehavioralPolicyStatus(
+    id: string,
+    status: BehavioralPolicyStatus,
+    candidateMetrics?: Record<string, unknown>
+  ): Promise<BehavioralPolicyRecord | null> {
+    const curRes = await this.pool.query('SELECT * FROM behavioral_policies WHERE id = $1', [id]);
+    if (!curRes.rows[0]) return null;
+    if (status === 'active') {
+      await this.pool.query(`UPDATE behavioral_policies SET status = 'rolled_back' WHERE status = 'active' AND id != $1`, [id]);
+    }
+    const promotedAt = status === 'active' ? new Date().toISOString() : curRes.rows[0].promoted_at;
+    const nextMetrics = candidateMetrics ? JSON.stringify(candidateMetrics) : JSON.stringify(curRes.rows[0].candidate_metrics || {});
+    const { rows } = await this.pool.query(
+      'UPDATE behavioral_policies SET status = $1, candidate_metrics = $2, promoted_at = $3 WHERE id = $4 RETURNING *',
+      [status, nextMetrics, promotedAt, id]
+    );
+    return rows[0] || null;
+  }
+
+  // --- Neos Capabilities & Approvals ---
+  async listNeosCapabilities(tenantId: string, enabledOnly = false): Promise<NeosCapabilityRecord[]> {
+    const { rows } = enabledOnly
+      ? await this.pool.query('SELECT * FROM neos_capabilities WHERE tenant_id = $1 AND enabled = TRUE ORDER BY module_name ASC, capability_id ASC', [tenantId])
+      : await this.pool.query('SELECT * FROM neos_capabilities WHERE tenant_id = $1 ORDER BY module_name ASC, capability_id ASC', [tenantId]);
+    return rows;
+  }
+
+  async upsertNeosCapability(input: Omit<NeosCapabilityRecord, 'id' | 'created_at' | 'last_synced_at'>): Promise<NeosCapabilityRecord> {
+    const { rows } = await this.pool.query(
+      `INSERT INTO neos_capabilities (id, tenant_id, module_name, capability_id, title, description, endpoint_url, required_scopes, risk_level, requires_confirmation, input_schema, output_schema, contract_version, enabled)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (tenant_id, capability_id) DO UPDATE SET module_name = EXCLUDED.module_name, title = EXCLUDED.title, description = EXCLUDED.description, endpoint_url = EXCLUDED.endpoint_url, required_scopes = EXCLUDED.required_scopes, risk_level = EXCLUDED.risk_level, requires_confirmation = EXCLUDED.requires_confirmation, input_schema = EXCLUDED.input_schema, output_schema = EXCLUDED.output_schema, contract_version = EXCLUDED.contract_version, enabled = EXCLUDED.enabled, last_synced_at = NOW()
+       RETURNING *`,
+      [uuidv4(), input.tenant_id, input.module_name, input.capability_id, input.title, input.description, input.endpoint_url, JSON.stringify(input.required_scopes), input.risk_level, input.requires_confirmation, JSON.stringify(input.input_schema), JSON.stringify(input.output_schema), input.contract_version, input.enabled]
+    );
+    return rows[0];
+  }
+
+  async deleteNeosCapability(id: string, tenantId: string): Promise<boolean> {
+    const res = await this.pool.query('DELETE FROM neos_capabilities WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  async listNeosApprovals(tenantId: string, status?: NeosApprovalStatus, limit = 50): Promise<NeosApprovalRecord[]> {
+    const { rows } = status
+      ? await this.pool.query('SELECT * FROM neos_approvals WHERE tenant_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3', [tenantId, status, limit])
+      : await this.pool.query('SELECT * FROM neos_approvals WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2', [tenantId, limit]);
+    return rows;
+  }
+
+  async getNeosApprovalById(id: string, tenantId: string): Promise<NeosApprovalRecord | null> {
+    const { rows } = await this.pool.query('SELECT * FROM neos_approvals WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+    return rows[0] || null;
+  }
+
+  async createNeosApproval(input: Omit<NeosApprovalRecord, 'id' | 'created_at' | 'decided_at'>): Promise<NeosApprovalRecord> {
+    const { rows } = await this.pool.query(
+      `INSERT INTO neos_approvals (id, tenant_id, capability_id, actor, action_summary, payload, required_scopes, status, decision_by, decision_note, execution_result, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [uuidv4(), input.tenant_id, input.capability_id, input.actor, input.action_summary, JSON.stringify(input.payload), JSON.stringify(input.required_scopes), input.status, input.decision_by, input.decision_note, input.execution_result ? JSON.stringify(input.execution_result) : null, input.expires_at]
+    );
+    return rows[0];
+  }
+
+  async updateNeosApproval(
+    id: string,
+    tenantId: string,
+    patch: Partial<Pick<NeosApprovalRecord, 'status' | 'decision_by' | 'decision_note' | 'execution_result' | 'decided_at'>>
+  ): Promise<NeosApprovalRecord | null> {
+    const existing = await this.getNeosApprovalById(id, tenantId);
+    if (!existing) return null;
+    const merged = { ...existing, ...patch };
+    const { rows } = await this.pool.query(
+      `UPDATE neos_approvals SET status = $1, decision_by = $2, decision_note = $3, execution_result = $4, decided_at = $5 WHERE id = $6 AND tenant_id = $7 RETURNING *`,
+      [merged.status, merged.decision_by, merged.decision_note, merged.execution_result ? JSON.stringify(merged.execution_result) : null, merged.decided_at, id, tenantId]
+    );
+    return rows[0] || null;
   }
 }

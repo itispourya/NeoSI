@@ -109,6 +109,11 @@ adminRouter.get('/overview', requireAdminConsoleAuth, asyncHandler(async (req, r
     relationshipsGlobal,
     capabilities,
     objectives,
+    knowledgePoliciesTenant,
+    knowledgePoliciesGlobal,
+    behavioralPolicies,
+    neosCapabilities,
+    neosApprovals,
   ] = await Promise.all([
     db.listTenants(),
     db.listApiKeys(),
@@ -143,19 +148,27 @@ adminRouter.get('/overview', requireAdminConsoleAuth, asyncHandler(async (req, r
     db.listRelationships('global', undefined, 50),
     getCapabilityRegistry(),
     db.listObjectives(undefined, { limit: 30 }),
+    db.listKnowledgePolicies(activeTenantId),
+    db.listKnowledgePolicies('global'),
+    db.listBehavioralPolicies(20),
+    db.listNeosCapabilities(activeTenantId, false),
+    db.listNeosApprovals(activeTenantId, undefined, 40),
   ]);
 
   const researchReports = mergeById(researchReportsTenant, researchReportsGlobal);
   const knowledgeSources = mergeById(knowledgeSourcesTenant, knowledgeSourcesGlobal);
+  const knowledgePolicies = mergeById(knowledgePoliciesTenant, knowledgePoliciesGlobal);
   const entities = mergeById(entitiesTenant, entitiesGlobal);
   const relationships = mergeById(relationshipsTenant, relationshipsGlobal);
   const repoIndex = indexWorkspaceCodebase();
+  const { circuitBreakers } = await import('../inference/registry.ts');
 
   res.json({
     subsystems: getConfiguredSubsystems(),
     capabilities: capabilities.modalities,
     hardware,
     runtimeHealth,
+    circuitBreakers: circuitBreakers.snapshot(),
     lockState,
     tenants: tenants.map((t) => ({ ...t, webhook_secret: t.webhook_secret ? '********' : null })),
     apiKeys: apiKeys.map((k) => ({ ...k, key_hash: undefined })),
@@ -166,6 +179,7 @@ adminRouter.get('/overview', requireAdminConsoleAuth, asyncHandler(async (req, r
     upgrades,
     experiments,
     trainingJobs,
+    behavioralPolicies,
     promotedModules: listPromotedModules(),
     dynamicApis,
     jobs,
@@ -179,6 +193,9 @@ adminRouter.get('/overview', requireAdminConsoleAuth, asyncHandler(async (req, r
     evaluations,
     researchReports,
     knowledgeSources,
+    knowledgePolicies,
+    neosCapabilities,
+    neosApprovals,
     graph: {
       entities: entities.map((e) => ({ ...e, embedding: undefined })),
       relationships,

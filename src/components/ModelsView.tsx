@@ -18,8 +18,58 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
   const [regArch, setRegArch] = useState('qwen2.5');
   const [regRepo, setRegRepo] = useState('Qwen/Qwen2.5-7B-Instruct');
   const [regLicense, setRegLicense] = useState('Apache-2.0');
+  const [testRuntime, setTestRuntime] = useState<'ollama' | 'vllm' | 'transformers' | 'tensorrt-llm' | 'custom-llm' | 'embedded'>('embedded');
 
   const compatMap = new Map(data.modelCompatibility.map((c) => [c.id, c]));
+
+  const runRuntimeTest = async () => {
+    setBusyModel('runtime-test');
+    setError(null);
+    try {
+      const res = await apiFetch<{
+        ok: boolean;
+        runtime: string;
+        endpoint: string;
+        latencyMs: number;
+        discoveredModels: string[];
+        message: string;
+      }>(
+        '/api/v1/models/runtimes/test',
+        { method: 'POST', body: JSON.stringify({ runtime: testRuntime }) }
+      );
+      setStatusMsg(
+        `Runtime ${res.runtime}: ${res.ok ? 'healthy' : 'unavailable'} (${res.latencyMs}ms · ${res.discoveredModels.length} model(s)) — ${res.message}`
+      );
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Runtime connection test failed');
+    } finally {
+      setBusyModel(null);
+    }
+  };
+
+  const discoverModels = async () => {
+    setBusyModel('discover');
+    setError(null);
+    try {
+      const res = await apiFetch<{
+        scannedRuntimes: string[];
+        registered: Array<{ id: string }>;
+        alreadyPresent: string[];
+      }>(
+        '/api/v1/models/discover',
+        { method: 'POST', body: '{}' }
+      );
+      setStatusMsg(
+        `Scanned ${res.scannedRuntimes.length} runtime(s): registered ${res.registered.length} new model(s), ${res.alreadyPresent.length} already synced.`
+      );
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Model discovery failed');
+    } finally {
+      setBusyModel(null);
+    }
+  };
 
   const runBenchmark = async (modelId: string) => {
     setBusyModel(modelId);
@@ -148,11 +198,86 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
   };
 
   const latestEval = data.evaluations[0];
+  const breakers = data.circuitBreakers ?? [];
 
   return (
     <div className="space-y-6">
       {statusMsg && <div className="p-3 rounded bg-blue-500/10 border border-blue-500/30 text-xs text-blue-200">{statusMsg}</div>}
       {error && <div className="p-3 rounded bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300">{error}</div>}
+
+      {/* Runtime Resilience & Discovery */}
+      <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-display text-sm font-semibold text-slate-100">Runtime Resilience & Model Discovery</h2>
+            <p className="text-xs text-slate-400">
+              Probe local inference endpoints, sync live runtime models, and inspect circuit breaker states.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label="Target runtime to test"
+              value={testRuntime}
+              onChange={(e) => setTestRuntime(e.target.value as 'ollama' | 'vllm' | 'transformers' | 'tensorrt-llm' | 'custom-llm' | 'embedded')}
+              className="px-2.5 py-1.5 bg-[#0B0F17] border border-slate-700 rounded text-xs font-mono text-slate-200"
+            >
+              <option value="embedded">embedded</option>
+              <option value="ollama">ollama</option>
+              <option value="vllm">vllm</option>
+              <option value="tensorrt-llm">tensorrt-llm</option>
+              <option value="transformers">transformers</option>
+              <option value="custom-llm">custom-llm</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => void runRuntimeTest()}
+              disabled={busyModel !== null}
+              className="px-3 py-1.5 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 whitespace-nowrap shrink-0 disabled:opacity-50"
+            >
+              {busyModel === 'runtime-test' ? 'Testing...' : 'Test Connection'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void discoverModels()}
+              disabled={busyModel !== null}
+              className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-xs font-medium text-white whitespace-nowrap shrink-0 disabled:opacity-50"
+            >
+              {busyModel === 'discover' ? 'Discovering...' : 'Discover & Sync'}
+            </button>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="text-slate-400 border-b border-slate-800 font-mono">
+              <tr>
+                <th className="py-2 pr-4">Runtime</th>
+                <th className="py-2 pr-4">Health</th>
+                <th className="py-2 pr-4">Latency</th>
+                <th className="py-2 pr-4">Circuit Breaker</th>
+                <th className="py-2">Endpoint / Detail</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/70 font-mono text-[11px]">
+              {data.runtimeHealth.map((rh) => {
+                const cb = breakers.find((b) => b.runtime === rh.runtime);
+                return (
+                  <tr key={rh.modelId + rh.runtime}>
+                    <td className="py-2 pr-4 text-slate-200">{rh.runtime}</td>
+                    <td className={`py-2 pr-4 ${rh.status === 'healthy' ? 'text-emerald-400' : rh.status === 'degraded' ? 'text-amber-400' : 'text-slate-400'}`}>
+                      {rh.status}
+                    </td>
+                    <td className="py-2 pr-4 tabular-nums text-slate-300">{rh.latencyMs}ms</td>
+                    <td className={`py-2 pr-4 tabular-nums ${cb?.state === 'open' ? 'text-rose-400' : cb?.state === 'half_open' ? 'text-amber-400' : 'text-emerald-400'}`}>
+                      {cb ? `${cb.state} (${cb.failures} fail / ${cb.successes} ok)` : 'closed (0 fail)'}
+                    </td>
+                    <td className="py-2 text-slate-400 truncate max-w-xs">{rh.endpoint} · {rh.message}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {/* Registered Models Table */}
       <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">

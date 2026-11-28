@@ -6,7 +6,8 @@ import { evaluateSkill } from '../evolution/pipeline.ts';
 import { embeddingEngine } from '../inference/embeddings.ts';
 import { knowledgeDaemon } from '../knowledge/daemon.ts';
 import { knowledgeGraph } from '../knowledge/graph.ts';
-import { storeMemory } from '../knowledge/memory.ts';
+import { getRetrievalDiagnostics, storeMemory } from '../knowledge/memory.ts';
+import { ingestConfiguredFeeds, revalidateStaleKnowledgeSources } from '../knowledge/feeds.ts';
 import { runAutonomousResearch } from '../knowledge/research.ts';
 import { extractTextFromPdfBuffer } from '../multimodal/pdf.ts';
 import { distillTextLocally } from '../neo/sovereignEngine.ts';
@@ -150,6 +151,12 @@ knowledgeRouter.get('/knowledge/search', requireApiGatewayAuth('read'), asyncHan
   return res.json({ query: q, matches: matches.map((m) => ({ ...m, embedding: undefined })) });
 }));
 
+knowledgeRouter.get('/knowledge/diagnostics', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
+  const q = String(req.query.q || 'system status overview').trim();
+  const result = await getRetrievalDiagnostics(q, req.neoAuth!.tenant.id);
+  return res.json(result);
+}));
+
 knowledgeRouter.post('/knowledge/learn', requireApiGatewayAuth('write'), asyncHandler(async (req, res) => {
   const topic = String(req.body?.topic || '').trim();
   if (topic.length < 3) return res.status(400).json({ error: 'Topic must be at least 3 characters' });
@@ -166,6 +173,70 @@ knowledgeRouter.get('/knowledge/sources', requireApiGatewayAuth('read'), asyncHa
   const db = await getDb();
   const sources = await db.listKnowledgeSources(req.neoAuth!.tenant.id, 50);
   res.json({ sources });
+}));
+
+knowledgeRouter.get('/knowledge/policies', requireApiGatewayAuth('read'), asyncHandler(async (req, res) => {
+  const db = await getDb();
+  const policies = await db.listKnowledgePolicies(req.neoAuth!.tenant.id);
+  res.json({ policies });
+}));
+
+const knowledgePolicySchema = z.object({
+  rule_type: z.enum(['trusted_domain', 'blocked_domain', 'feed_source']),
+  pattern: z.string().min(1).max(400),
+  source_kind: z.string().max(60).optional(),
+  min_reliability: z.number().min(0).max(1).optional(),
+  revalidation_hours: z.number().int().min(1).max(720).optional(),
+  enabled: z.boolean().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+knowledgeRouter.post('/knowledge/policies', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
+  const parsed = knowledgePolicySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid knowledge policy', issues: parsed.error.issues });
+  const db = await getDb();
+  const policy = await db.upsertKnowledgePolicy({
+    tenant_id: req.neoAuth!.tenant.id,
+    rule_type: parsed.data.rule_type,
+    pattern: parsed.data.pattern.trim(),
+    source_kind: parsed.data.source_kind ?? (parsed.data.rule_type === 'feed_source' ? 'rss' : 'domain'),
+    min_reliability: parsed.data.min_reliability ?? 0.5,
+    revalidation_hours: parsed.data.revalidation_hours ?? 24,
+    etag: null,
+    last_modified: null,
+    last_fetched_at: null,
+    enabled: parsed.data.enabled ?? true,
+    metadata: parsed.data.metadata || {},
+  });
+  return res.status(201).json({ policy });
+}));
+
+knowledgeRouter.patch('/knowledge/policies/:id', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
+  const db = await getDb();
+  const updated = await db.updateKnowledgePolicy(String(req.params.id), {
+    enabled: typeof req.body?.enabled === 'boolean' ? req.body.enabled : undefined,
+    min_reliability: typeof req.body?.min_reliability === 'number' ? req.body.min_reliability : undefined,
+    revalidation_hours: typeof req.body?.revalidation_hours === 'number' ? req.body.revalidation_hours : undefined,
+    metadata: req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : undefined,
+  });
+  if (!updated) return res.status(404).json({ error: 'Knowledge policy not found' });
+  return res.json({ policy: updated });
+}));
+
+knowledgeRouter.delete('/knowledge/policies/:id', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
+  const db = await getDb();
+  const deleted = await db.deleteKnowledgePolicy(String(req.params.id));
+  if (!deleted) return res.status(404).json({ error: 'Knowledge policy not found' });
+  return res.status(204).end();
+}));
+
+knowledgeRouter.post('/knowledge/feeds/sync', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
+  const tenantId = req.neoAuth!.tenant.id;
+  const [syncReport, revalidation] = await Promise.all([
+    ingestConfiguredFeeds({ tenantId }),
+    revalidateStaleKnowledgeSources(tenantId),
+  ]);
+  return res.json({ syncReport, revalidation });
 }));
 
 // Skills Registry endpoints

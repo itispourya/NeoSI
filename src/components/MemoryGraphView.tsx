@@ -33,6 +33,23 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [policyType, setPolicyType] = useState<'trusted_domain' | 'blocked_domain' | 'feed_source'>('trusted_domain');
+  const [policyPattern, setPolicyPattern] = useState('');
+  const [diagQuery, setDiagQuery] = useState('double-entry ledger balance');
+  const [diagResult, setDiagResult] = useState<{
+    diagnostics: {
+      normalizedQuery: string;
+      policyVersion: number;
+      minReliability: number;
+      ragTopK: number;
+      totalHitsBeforeFilter: number;
+      filteredOutLowReliability: number;
+      vectorHits: number;
+      lexicalHits: number;
+    };
+    topMatches: Array<{ id: string; memoryType: string; title: string; epistemicStatus: string; reliability: number; score: number }>;
+  } | null>(null);
+
   const runSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -157,9 +174,93 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
     }
   };
 
+  const addKnowledgePolicy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!policyPattern.trim()) return;
+    setBusy(true);
+    setStatusMsg(null);
+    try {
+      await apiFetch('/api/v1/knowledge/policies', {
+        method: 'POST',
+        body: JSON.stringify({ rule_type: policyType, pattern: policyPattern.trim() }),
+      });
+      setPolicyPattern('');
+      setStatusMsg(`Saved knowledge policy (${policyType}).`);
+      await onRefresh();
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to save knowledge policy');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleKnowledgePolicy = async (id: string, enabled: boolean) => {
+    setBusy(true);
+    setStatusMsg(null);
+    try {
+      await apiFetch(`/api/v1/knowledge/policies/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled }),
+      });
+      await onRefresh();
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to toggle policy');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteKnowledgePolicy = async (id: string) => {
+    setBusy(true);
+    setStatusMsg(null);
+    try {
+      await apiFetch(`/api/v1/knowledge/policies/${id}`, { method: 'DELETE' });
+      await onRefresh();
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to delete policy');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const syncFeeds = async () => {
+    setBusy(true);
+    setStatusMsg(null);
+    try {
+      const res = await apiFetch<{
+        syncReport: { feedsChecked: number; skippedNotModified: number; skippedDeduplicated: number; itemsIngested: number };
+        revalidation: { checked: number; staleCount: number };
+      }>('/api/v1/knowledge/feeds/sync', { method: 'POST', body: '{}' });
+      setStatusMsg(
+        `Feeds checked: ${res.syncReport.feedsChecked}, ingested: ${res.syncReport.itemsIngested}, 304 skipped: ${res.syncReport.skippedNotModified}, deduped: ${res.syncReport.skippedDeduplicated}, stale revalidated: ${res.revalidation.staleCount}.`
+      );
+      await onRefresh();
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Feed sync failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runDiagnostics = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setStatusMsg(null);
+    try {
+      const params = new URLSearchParams({ q: diagQuery });
+      const res = await apiFetch<NonNullable<typeof diagResult>>(`/api/v1/knowledge/diagnostics?${params.toString()}`);
+      setDiagResult(res);
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Diagnostics failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const shownMemories = (searchResults ?? data.recentMemories).filter(
     (m) => selectedLayer === 'all' || m.memory_type === selectedLayer
   );
+  const policies = data.knowledgePolicies ?? [];
 
   return (
     <div className="space-y-6">
@@ -403,6 +504,144 @@ export function MemoryGraphView({ data, onRefresh }: MemoryGraphViewProps) {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* Knowledge Governance Policies & RAG Retrieval Diagnostics */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-display text-sm font-semibold text-slate-100">
+              Knowledge Governance & Feeds ({policies.length})
+            </h2>
+            <button
+              type="button"
+              onClick={() => void syncFeeds()}
+              disabled={busy}
+              className="px-3 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200 whitespace-nowrap shrink-0"
+            >
+              Sync Feeds Now
+            </button>
+          </div>
+          <form onSubmit={addKnowledgePolicy} className="flex flex-wrap gap-2">
+            <select
+              aria-label="Knowledge policy rule type"
+              value={policyType}
+              onChange={(e) => setPolicyType(e.target.value as 'trusted_domain' | 'blocked_domain' | 'feed_source')}
+              className="px-2.5 py-2 bg-[#0B0F17] border border-slate-700 rounded text-xs text-slate-200"
+            >
+              <option value="trusted_domain">trusted_domain</option>
+              <option value="blocked_domain">blocked_domain</option>
+              <option value="feed_source">feed_source</option>
+            </select>
+            <input
+              type="text"
+              value={policyPattern}
+              onChange={(e) => setPolicyPattern(e.target.value)}
+              placeholder="domain (arxiv.org) or feed URL / github_releases:owner/repo"
+              aria-label="Policy pattern"
+              required
+              className="flex-1 min-w-[180px] px-3 py-2 bg-[#0B0F17] border border-slate-700 rounded text-xs text-slate-100"
+            />
+            <button
+              type="submit"
+              disabled={busy}
+              className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-xs font-medium text-white whitespace-nowrap shrink-0"
+            >
+              Add Rule
+            </button>
+          </form>
+          <div className="divide-y divide-slate-800/80 max-h-48 overflow-y-auto">
+            {policies.length === 0 ? (
+              <div className="py-3 text-xs text-slate-400">No custom domain or feed rules added yet.</div>
+            ) : (
+              policies.map((p) => (
+                <div key={p.id} className="py-2 flex items-center justify-between gap-3 text-xs">
+                  <div className="min-w-0">
+                    <div className="font-mono text-slate-200 truncate">{p.pattern}</div>
+                    <div className="font-mono text-[11px] text-slate-400">
+                      {p.rule_type} · minRel {p.min_reliability}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => void toggleKnowledgePolicy(p.id, !p.enabled)}
+                      className={`px-2 py-1 rounded border text-[11px] whitespace-nowrap ${
+                        p.enabled ? 'border-emerald-500/40 text-emerald-300' : 'border-slate-700 text-slate-400'
+                      }`}
+                    >
+                      {p.enabled ? 'Active' : 'Paused'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void deleteKnowledgePolicy(p.id)}
+                      className="text-[11px] font-mono text-rose-400 hover:text-rose-300 whitespace-nowrap"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">
+          <h2 className="font-display text-sm font-semibold text-slate-100">RAG Retrieval Diagnostics</h2>
+          <form onSubmit={runDiagnostics} className="flex gap-2">
+            <input
+              type="text"
+              value={diagQuery}
+              onChange={(e) => setDiagQuery(e.target.value)}
+              placeholder="Inspect normalization, policy filtering & provenance..."
+              aria-label="RAG diagnostics query"
+              required
+              className="flex-1 px-3 py-2 bg-[#0B0F17] border border-slate-700 rounded text-xs text-slate-100"
+            />
+            <button
+              type="submit"
+              disabled={busy}
+              className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-xs font-medium text-white whitespace-nowrap shrink-0"
+            >
+              Inspect
+            </button>
+          </form>
+          {!diagResult ? (
+            <div className="text-xs text-slate-400">
+              Run diagnostics to inspect multilingual normalization, active behavioral policy thresholds, and hybrid ranking provenance.
+            </div>
+          ) : (
+            <div className="space-y-3 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[11px] tabular-nums">
+                <div className="p-2 bg-[#0B0F17] border border-slate-800 rounded">
+                  Policy v{diagResult.diagnostics.policyVersion} · topK {diagResult.diagnostics.ragTopK}
+                </div>
+                <div className="p-2 bg-[#0B0F17] border border-slate-800 rounded">
+                  minRel {diagResult.diagnostics.minReliability}
+                </div>
+                <div className="p-2 bg-[#0B0F17] border border-slate-800 rounded">
+                  Filtered {diagResult.diagnostics.filteredOutLowReliability}/{diagResult.diagnostics.totalHitsBeforeFilter}
+                </div>
+                <div className="p-2 bg-[#0B0F17] border border-slate-800 rounded">
+                  Vec {diagResult.diagnostics.vectorHits} · Lex {diagResult.diagnostics.lexicalHits}
+                </div>
+              </div>
+              <div className="font-mono text-[11px] text-slate-400 truncate">
+                Normalized: {diagResult.diagnostics.normalizedQuery}
+              </div>
+              <div className="divide-y divide-slate-800/80 max-h-36 overflow-y-auto">
+                {diagResult.topMatches.map((hit) => (
+                  <div key={hit.id} className="py-1.5 flex items-center justify-between gap-3">
+                    <span className="text-slate-200 truncate">{hit.title}</span>
+                    <span className="font-mono text-[11px] text-slate-400 tabular-nums shrink-0">
+                      {hit.memoryType} · {hit.epistemicStatus} · {hit.score}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

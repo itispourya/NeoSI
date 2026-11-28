@@ -29,6 +29,38 @@ function scopesFromCheckpoint(checkpoint: Record<string, unknown>): string[] {
   return normalizeExecutionScopes(Array.isArray(checkpoint.executionScopes) ? checkpoint.executionScopes as string[] : ['read']);
 }
 
+export type FailureClass =
+  | 'transient'
+  | 'rate_limited'
+  | 'timeout'
+  | 'permission_denied'
+  | 'invalid_input'
+  | 'fatal';
+
+export function classifyFailure(err: unknown): FailureClass {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  if (/429|rate limit|too many requests/.test(msg)) return 'rate_limited';
+  if (/timeout|timed out|abort|etimedout/.test(msg)) return 'timeout';
+  if (/scope|permission|unauthorized|forbidden|403|401|ssrf|blocked/.test(msg)) return 'permission_denied';
+  if (/invalid|zod|schema|validation|400|not found|404/.test(msg)) return 'invalid_input';
+  if (/econnreset|econnrefused|500|502|503|504|network|socket|fetch failed/.test(msg)) return 'transient';
+  return 'fatal';
+}
+
+function compressEvidenceSnippets(snippets: string[], maxTotalChars = 10_000): string[] {
+  let total = snippets.reduce((acc, s) => acc + s.length, 0);
+  if (total <= maxTotalChars) return snippets;
+  const compressed = [...snippets];
+  for (let i = 0; i < compressed.length - 2 && total > maxTotalChars; i++) {
+    if (compressed[i].length > 260) {
+      const next = `${compressed[i].slice(0, 220)} [...compressed...]`;
+      total -= compressed[i].length - next.length;
+      compressed[i] = next;
+    }
+  }
+  return compressed;
+}
+
 class DurableAgentRuntime {
   private events = new EventEmitter();
   private runningTaskIds = new Set<string>();
@@ -166,7 +198,6 @@ class DurableAgentRuntime {
     const savedScopes = normalizeExecutionScopes(Array.isArray(existing.checkpoint?.executionScopes)
       ? (existing.checkpoint.executionScopes as string[])
       : ['read']);
-    // A new credential can only recover the intersection of its current scopes and the original grant.
     const effectiveScopes = normalizeExecutionScopes(currentScopes).filter((scope) => savedScopes.includes(scope));
     const queued = existing.status === 'planning'
       ? existing
@@ -210,7 +241,6 @@ class DurableAgentRuntime {
             })
           : task;
         if (!reset) continue;
-        // Recovered tasks do not inherit historical write/admin privileges without a fresh credential.
         queueMicrotask(() => {
           void this.executeTaskLoop(task.id, task.tenant_id, 'system:recovery', ['read']);
         });
@@ -231,7 +261,6 @@ class DurableAgentRuntime {
     }
 
     const db = await getDb();
-    // Atomic claim: only a task in planning state may transition to running.
     const claimed = await db.updateTaskIfStatus(taskId, tenantId, ['planning'], { status: 'running' });
     if (!claimed) return db.getTaskById(taskId, tenantId);
 
@@ -249,23 +278,23 @@ class DurableAgentRuntime {
       const steps = await db.listTaskSteps(task.id, tenantId);
       const usage = { ...task.usage };
       const loopCounts = { ...(task.loop_signature_counts || {}) };
-      const evidenceSnippets: string[] = Array.isArray(task.checkpoint?.evidenceSnippets)
+      let evidenceSnippets: string[] = Array.isArray(task.checkpoint?.evidenceSnippets)
         ? [...(task.checkpoint.evidenceSnippets as string[])]
         : [];
       const toolOutputs: Array<{ toolId: string; ok: boolean; output?: Record<string, unknown>; error?: string }> = [];
       let answerText = '';
+      let estimatedCostUsd = 0;
 
-      for (const step of steps) {
+      for (let idx = 0; idx < steps.length; idx++) {
+        const step = steps[idx];
         if (step.status === 'completed' || step.status === 'skipped') continue;
 
-        // Cancellation check
         const latestTask = await db.getTaskById(task.id, tenantId);
         if (this.cancelledTaskIds.has(task.id) || latestTask?.status === 'cancelled') {
           await this.emitEvent(task.id, tenantId, 'task.cancelled', { stepIndex: step.step_index });
           return latestTask;
         }
 
-        // Budget enforcement
         const elapsed = Date.now() - startMs;
         const cumulativeDurationMs = Number(task.usage.durationMs || 0) + elapsed;
         if (usage.stepsExecuted >= task.budgets.maxSteps || cumulativeDurationMs > task.budgets.maxDurationMs) {
@@ -280,15 +309,28 @@ class DurableAgentRuntime {
           return db.getTaskById(task.id, tenantId);
         }
 
-        // Dependency readiness check (allow reason/verify to synthesize over available evidence once prior steps have settled)
         const freshSteps = await db.listTaskSteps(task.id, tenantId);
         const depsReady = step.depends_on.every((depIdx) => {
           const dep = freshSteps.find((s) => s.step_index === depIdx);
           return Boolean(dep && (dep.status === 'completed' || dep.status === 'skipped'));
         });
-        if (!depsReady) continue;
+        if (!depsReady) {
+          // If an upstream gather step failed but a reason/verify step is waiting, allow synthesis over available evidence
+          if (step.action_type === 'reason' || step.action_type === 'verify') {
+            const anyFailedDep = step.depends_on.some((depIdx) => {
+              const dep = freshSteps.find((s) => s.step_index === depIdx);
+              return dep?.status === 'failed';
+            });
+            const anyPendingDep = step.depends_on.some((depIdx) => {
+              const dep = freshSteps.find((s) => s.step_index === depIdx);
+              return !dep || dep.status === 'pending' || dep.status === 'running';
+            });
+            if (!anyFailedDep || anyPendingDep) continue;
+          } else {
+            continue;
+          }
+        }
 
-        // Loop signature guard
         const sig = `${step.action_type}:${step.tool_id || 'none'}:${JSON.stringify(step.input).slice(0, 80)}`;
         const loopCheck = taskPlanner.detectLoop(loopCounts, sig, 3);
         if (loopCheck.looped) {
@@ -318,6 +360,7 @@ class DurableAgentRuntime {
         try {
           let stepOutput: Record<string, unknown> = {};
           if (step.action_type === 'reason') {
+            evidenceSnippets = compressEvidenceSnippets(evidenceSnippets);
             const prompt = [
               evidenceSnippets.length > 0 ? `Retrieved Context & Evidence:\n${evidenceSnippets.join('\n')}` : '',
               `User Request: ${task.goal}`,
@@ -331,7 +374,8 @@ class DurableAgentRuntime {
               prompt,
             });
             answerText = inf.text;
-            stepOutput = { answer: inf.text, runtime: inf.runtime, model: inf.modelId };
+            estimatedCostUsd += inf.estimatedCostUsd ?? 0;
+            stepOutput = { answer: inf.text, runtime: inf.runtime, model: inf.modelId, estimatedCostUsd: inf.estimatedCostUsd ?? 0 };
           } else if (step.action_type === 'verify') {
             const verdict = criticEngine.verify({
               goal: task.goal,
@@ -345,22 +389,24 @@ class DurableAgentRuntime {
             if (usage.toolCalls >= task.budgets.maxToolCalls) {
               throw new Error(`Tool call budget (${task.budgets.maxToolCalls}) exceeded`);
             }
-            // Retry up to 2 attempts on transient failure with bounded backoff
             let execRes = await toolRegistry.executeTool(step.tool_id, step.input, {
               tenantId,
               actor,
               taskId: task.id,
               scopes: scopesForExecution,
             });
-            if (!execRes.ok && step.attempts === 0) {
-              usage.retries++;
-              await new Promise((r) => setTimeout(r, 150));
-              execRes = await toolRegistry.executeTool(step.tool_id, step.input, {
-                tenantId,
-                actor,
-                taskId: task.id,
-                scopes: scopesForExecution,
-              });
+            if (!execRes.ok) {
+              const failureClass = classifyFailure(execRes.error || '');
+              if ((failureClass === 'transient' || failureClass === 'rate_limited') && step.attempts === 0) {
+                usage.retries++;
+                await new Promise((r) => setTimeout(r, 150));
+                execRes = await toolRegistry.executeTool(step.tool_id, step.input, {
+                  tenantId,
+                  actor,
+                  taskId: task.id,
+                  scopes: scopesForExecution,
+                });
+              }
             }
             usage.toolCalls++;
             toolOutputs.push({ toolId: step.tool_id, ok: execRes.ok, output: execRes.output, error: execRes.error });
@@ -369,7 +415,7 @@ class DurableAgentRuntime {
             }
             stepOutput = execRes.output || {};
             const wrapped = sanitizeUntrustedContent(JSON.stringify(stepOutput).slice(0, 700), `tool:${step.tool_id}`);
-            evidenceSnippets.push(wrapped.wrappedData);
+            evidenceSnippets = compressEvidenceSnippets([...evidenceSnippets, wrapped.wrappedData]);
           }
 
           const afterExecution = await db.getTaskById(task.id, tenantId);
@@ -424,15 +470,69 @@ class DurableAgentRuntime {
             return latestAfterError;
           }
           const msg = stepErr instanceof Error ? stepErr.message : String(stepErr);
+          const failureClass = classifyFailure(stepErr);
           await db.upsertTaskStep({
             ...step,
             status: 'failed',
-            error: msg,
+            error: `[${failureClass}] ${msg}`,
             attempts: step.attempts + 1,
             started_at: step.started_at || new Date().toISOString(),
             finished_at: new Date().toISOString(),
           });
-          await this.emitEvent(task.id, tenantId, 'step.failed', { stepIndex: step.step_index, error: msg });
+          await this.emitEvent(task.id, tenantId, 'step.failed', {
+            stepIndex: step.step_index,
+            failureClass,
+            error: msg,
+          });
+
+          // Dynamic replanning when a gather step fails & budget allows
+          if (usage.stepsExecuted + 1 < task.budgets.maxSteps && steps.length < task.budgets.maxSteps + 2) {
+            const replan = taskPlanner.replanOnFailure({
+              goal: task.goal,
+              failedStep: {
+                stepIndex: step.step_index,
+                title: step.title,
+                actionType: step.action_type,
+                toolId: step.tool_id,
+                input: step.input,
+              },
+              failureClass,
+              nextStepIndex: steps.length,
+              existingToolsUsed: steps.map((s) => s.tool_id || '').filter(Boolean),
+              scopes: scopesForExecution,
+            });
+            await this.emitEvent(task.id, tenantId, 'task.replanned', {
+              failedStepIndex: step.step_index,
+              failureClass,
+              strategy: replan.strategy,
+              reason: replan.reason,
+            });
+            if (replan.strategy === 'substitute' && replan.replacementStep) {
+              const inserted = await db.upsertTaskStep({
+                task_id: task.id,
+                tenant_id: tenantId,
+                step_index: replan.replacementStep.stepIndex,
+                title: replan.replacementStep.title,
+                action_type: replan.replacementStep.actionType,
+                tool_id: replan.replacementStep.toolId ?? null,
+                depends_on: replan.replacementStep.dependsOn,
+                status: 'pending',
+                input: replan.replacementStep.toolInput || {},
+                output: null,
+                error: null,
+                attempts: 0,
+                started_at: null,
+                finished_at: null,
+              });
+              // Insert right before the final reason/verify steps so dependencies remain clean
+              const reasonIdx = steps.findIndex((s) => s.action_type === 'reason' && s.status === 'pending');
+              if (reasonIdx > idx) {
+                steps.splice(reasonIdx, 0, inserted);
+              } else {
+                steps.push(inserted);
+              }
+            }
+          }
         }
       }
 
@@ -468,6 +568,7 @@ class DurableAgentRuntime {
         answer: answerText || evidenceSnippets.join('\n'),
         evidenceCount: evidenceSnippets.length,
         toolCalls: usage.toolCalls,
+        estimatedCostUsd: Number(estimatedCostUsd.toFixed(6)),
         verification: finalVerification,
         completedSteps: finalSteps.filter((s) => s.status === 'completed').length,
         failedSteps: failedSteps.length,

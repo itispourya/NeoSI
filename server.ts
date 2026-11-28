@@ -13,6 +13,7 @@ import { forgeRouter } from './src/server/routes/forge.ts';
 import { knowledgeRouter } from './src/server/routes/knowledge.ts';
 import { memoryRouter } from './src/server/routes/memory.ts';
 import { modelsRouter } from './src/server/routes/models.ts';
+import { neosRouter } from './src/server/routes/neos.ts';
 import { openaiCompatRouter } from './src/server/routes/openaiCompat.ts';
 import { systemRouter } from './src/server/routes/system.ts';
 import { tasksRouter } from './src/server/routes/tasks.ts';
@@ -48,6 +49,7 @@ async function startServer() {
   app.use('/api/v1', toolsRouter);
   app.use('/api/v1', modelsRouter);
   app.use('/api/v1', openaiCompatRouter);
+  app.use('/api/v1', neosRouter);
   app.use('/api/v1', evolutionRouter);
   app.use('/api/v1', forgeRouter);
   app.use('/api/admin', adminRouter);

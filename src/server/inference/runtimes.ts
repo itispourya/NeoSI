@@ -1,16 +1,30 @@
 import { env } from '../config/env.ts';
 import type { SupportedLanguage } from '../db/schema.ts';
+import { parseRetryAfterMs, RetryableHttpError } from './resilience.ts';
 import type {
   InferenceRequest,
   InferenceResponse,
   InferenceStream,
   ModelHealth,
   ModelRuntime,
+  ResponseFormatSpec,
   RuntimeKind,
+  ToolCallResult,
 } from './types.ts';
 
 function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil((text || '').length / 4));
+}
+
+function buildCombinedAbortSignal(userSignal?: AbortSignal, timeoutMs = 60_000): AbortSignal {
+  const timeoutSig = AbortSignal.timeout(timeoutMs);
+  return userSignal ? AbortSignal.any([userSignal, timeoutSig]) : timeoutSig;
+}
+
+function normalizeOpenAiResponseFormat(spec?: ResponseFormatSpec): Record<string, unknown> | undefined {
+  if (!spec || spec === 'text') return undefined;
+  if (spec === 'json') return { type: 'json_object' };
+  return spec;
 }
 
 /**
@@ -156,6 +170,27 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
     }
   }
 
+  async discoverModels(): Promise<string[]> {
+    const base = this.getBaseUrl().replace(/\/+$/, '');
+    if (!base) return [];
+    const probePath = this.kind === 'ollama' ? '/api/tags' : '/v1/models';
+    try {
+      const res = await fetch(`${base}${probePath}`, {
+        headers: this.buildHeaders(false),
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!res.ok) return [];
+      if (this.kind === 'ollama') {
+        const tags = (await res.json()) as { models?: Array<{ name?: string; model?: string }> };
+        return (tags.models || []).map((m) => m.name || m.model || '').filter(Boolean);
+      }
+      const data = (await res.json()) as { data?: Array<{ id?: string }> };
+      return (data.data || []).map((m) => m.id || '').filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
   async generate(req: InferenceRequest, modelId: string): Promise<InferenceResponse> {
     const base = this.getBaseUrl().replace(/\/+$/, '');
     if (!base) throw new Error(`${this.displayName} base URL not configured`);
@@ -171,10 +206,11 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
       temperature: req.temperature ?? 0.2,
       max_tokens: req.maxTokens ?? 2048,
     };
-    if (req.responseFormat === 'json' && this.kind !== 'ollama') {
-      body.response_format = { type: 'json_object' };
+    const rf = normalizeOpenAiResponseFormat(req.responseFormat);
+    if (rf && this.kind !== 'ollama') {
+      body.response_format = rf;
     }
-    if (Array.isArray(req.tools) && req.tools.length > 0) {
+    if (Array.isArray(req.tools) && req.tools.length > 0 && req.toolChoice !== 'none') {
       body.tools = req.tools.map((t) => ({
         type: 'function',
         function: {
@@ -183,28 +219,38 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
           parameters: t.parameters,
         },
       }));
+      if (req.toolChoice) {
+        body.tool_choice = req.toolChoice;
+      }
     }
 
     const res = await fetch(`${base}/v1/chat/completions`, {
       method: 'POST',
       headers: this.buildHeaders(true),
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(60_000),
+      signal: buildCombinedAbortSignal(req.signal, req.timeoutMs ?? 60_000),
     });
     if (!res.ok) {
-      throw new Error(`${this.kind} returned HTTP ${res.status}: ${await res.text()}`);
+      const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+      const errText = await res.text().catch(() => '');
+      if (res.status === 429 || res.status >= 500 || res.status === 408) {
+        throw new RetryableHttpError(`${this.kind} returned HTTP ${res.status}: ${errText.slice(0, 300)}`, res.status, retryAfterMs);
+      }
+      throw new Error(`${this.kind} returned HTTP ${res.status}: ${errText.slice(0, 300)}`);
     }
 
     const data = (await res.json()) as {
       choices?: Array<{
+        finish_reason?: string;
         message?: {
-          content?: string;
+          content?: string | null;
           tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
         };
       }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
-    const msg = data.choices?.[0]?.message;
+    const choice = data.choices?.[0];
+    const msg = choice?.message;
     const text = msg?.content ?? '';
     const toolCalls = Array.isArray(msg?.tool_calls)
       ? msg.tool_calls.map((tc, idx) => {
@@ -225,6 +271,12 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
     const completionTokens = data.usage?.completion_tokens ?? estimateTokens(text);
     const latencyMs = Math.max(1, Date.now() - start);
     const tokensPerSec = Number(((completionTokens / latencyMs) * 1000).toFixed(1));
+    const finishReason =
+      toolCalls && toolCalls.length > 0
+        ? 'tool_calls'
+        : choice?.finish_reason === 'length'
+          ? 'length'
+          : 'stop';
 
     return {
       text,
@@ -234,6 +286,7 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
       completionTokens,
       latencyMs,
       tokensPerSec,
+      finishReason,
       ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
       isFallback: false,
     };
@@ -248,28 +301,47 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
       ...(req.systemInstruction ? [{ role: 'system', content: req.systemInstruction }] : []),
       { role: 'user', content: req.prompt },
     ];
+    const body: Record<string, unknown> = {
+      model: modelId,
+      messages,
+      stream: true,
+      temperature: req.temperature ?? 0.2,
+      max_tokens: req.maxTokens ?? 2048,
+    };
+    const rf = normalizeOpenAiResponseFormat(req.responseFormat);
+    if (rf && this.kind !== 'ollama') {
+      body.response_format = rf;
+    }
+    if (Array.isArray(req.tools) && req.tools.length > 0 && req.toolChoice !== 'none') {
+      body.tools = req.tools.map((t) => ({
+        type: 'function',
+        function: { name: t.name, description: t.description, parameters: t.parameters },
+      }));
+      if (req.toolChoice) body.tool_choice = req.toolChoice;
+    }
+
     const res = await fetch(`${base}/v1/chat/completions`, {
       method: 'POST',
       headers: this.buildHeaders(true),
-      body: JSON.stringify({
-        model: modelId,
-        messages,
-        stream: true,
-        temperature: req.temperature ?? 0.2,
-        max_tokens: req.maxTokens ?? 2048,
-      }),
-      signal: AbortSignal.timeout(60_000),
+      body: JSON.stringify(body),
+      signal: buildCombinedAbortSignal(req.signal, req.timeoutMs ?? 60_000),
     });
     if (!res.ok || !res.body) {
-      throw new Error(`${this.kind} stream failed HTTP ${res.status}`);
+      const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+      throw new RetryableHttpError(`${this.kind} stream failed HTTP ${res.status}`, res.status, retryAfterMs);
     }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let fullText = '';
+    const toolCallAccum = new Map<number, { id: string; name: string; argsRaw: string }>();
 
     while (true) {
+      if (req.signal?.aborted) {
+        await reader.cancel().catch(() => undefined);
+        throw new DOMException('Inference stream aborted', 'AbortError');
+      }
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -281,17 +353,55 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
         const payload = trimmed.slice(5).trim();
         if (payload === '[DONE]') continue;
         try {
-          const parsed = JSON.parse(payload) as { choices?: Array<{ delta?: { content?: string } }> };
-          const chunk = parsed.choices?.[0]?.delta?.content || '';
+          const parsed = JSON.parse(payload) as {
+            choices?: Array<{
+              delta?: {
+                content?: string;
+                tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
+              };
+            }>;
+          };
+          const delta = parsed.choices?.[0]?.delta;
+          const chunk = delta?.content || '';
           if (chunk) {
             fullText += chunk;
             yield { type: 'delta', text: chunk };
+          }
+          if (Array.isArray(delta?.tool_calls)) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index ?? 0;
+              const existing = toolCallAccum.get(idx) || { id: tc.id || `tc_${idx}`, name: '', argsRaw: '' };
+              if (tc.id) existing.id = tc.id;
+              if (tc.function?.name) existing.name += tc.function.name;
+              if (tc.function?.arguments) existing.argsRaw += tc.function.arguments;
+              toolCallAccum.set(idx, existing);
+              yield {
+                type: 'delta',
+                text: '',
+                toolCallDelta: {
+                  index: idx,
+                  id: tc.id,
+                  name: tc.function?.name,
+                  argumentsDelta: tc.function?.arguments,
+                },
+              };
+            }
           }
         } catch {
           // ignore partial JSON frames
         }
       }
     }
+
+    const toolCalls: ToolCallResult[] = Array.from(toolCallAccum.values()).map((tc) => {
+      let parsedArgs: Record<string, unknown> = {};
+      try {
+        parsedArgs = tc.argsRaw ? (JSON.parse(tc.argsRaw) as Record<string, unknown>) : {};
+      } catch {
+        parsedArgs = { raw: tc.argsRaw };
+      }
+      return { id: tc.id, name: tc.name || 'unknown', arguments: parsedArgs };
+    });
 
     const promptTokens = estimateTokens(req.prompt + (req.systemInstruction || ''));
     const completionTokens = estimateTokens(fullText);
@@ -306,6 +416,8 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
         completionTokens,
         latencyMs,
         tokensPerSec: Number(((completionTokens / latencyMs) * 1000).toFixed(1)),
+        finishReason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
         isFallback: false,
       },
     };
@@ -760,15 +872,55 @@ test('handles empty payload gracefully', () => {
     return fallbackResponses[lang];
   }
 
+  private synthesizeToolCallsIfRequested(req: InferenceRequest): ToolCallResult[] | undefined {
+    if (!req.tools?.length || req.toolChoice === 'none') return undefined;
+    const rawUserQuestion = req.prompt.match(/User Request:\s*([\s\S]*)$/i)?.[1]?.trim() || req.prompt;
+
+    // Specific function forced via tool_choice: { type: 'function', function: { name } }
+    if (typeof req.toolChoice === 'object' && req.toolChoice?.type === 'function') {
+      const targetName = req.toolChoice.function.name;
+      const toolDef = req.tools.find((t) => t.name === targetName);
+      if (toolDef) {
+        return [{ id: `call_${Date.now()}`, name: toolDef.name, arguments: buildToolArgsFromPrompt(toolDef.parameters, rawUserQuestion) }];
+      }
+    }
+
+    // Required or keyword-matched deterministic tool selection
+    const qLower = rawUserQuestion.toLowerCase();
+    for (const toolDef of req.tools) {
+      const nameTokens = toolDef.name.toLowerCase().split(/[._-]+/).filter((t) => t.length >= 3);
+      const descTokens = toolDef.description.toLowerCase().split(/\s+/).filter((t) => t.length >= 5);
+      const matched = nameTokens.some((tok) => qLower.includes(tok)) || descTokens.slice(0, 4).some((tok) => qLower.includes(tok));
+      if (matched) {
+        return [{ id: `call_${Date.now()}`, name: toolDef.name, arguments: buildToolArgsFromPrompt(toolDef.parameters, rawUserQuestion) }];
+      }
+    }
+
+    if (req.toolChoice === 'required') {
+      const first = req.tools[0];
+      return [{ id: `call_${Date.now()}`, name: first.name, arguments: buildToolArgsFromPrompt(first.parameters, rawUserQuestion) }];
+    }
+    return undefined;
+  }
+
   async generate(req: InferenceRequest, modelId = 'neo-embedded-core-v1'): Promise<InferenceResponse> {
+    if (req.signal?.aborted) {
+      throw new DOMException('Inference aborted by caller', 'AbortError');
+    }
     const start = Date.now();
-    const text =
-      req.responseFormat === 'json'
+    const isJson =
+      req.responseFormat === 'json' ||
+      (typeof req.responseFormat === 'object' && (req.responseFormat.type === 'json_object' || req.responseFormat.type === 'json_schema'));
+
+    const toolCalls = !isJson ? this.synthesizeToolCallsIfRequested(req) : undefined;
+    const text = toolCalls
+      ? ''
+      : isJson
         ? JSON.stringify(this.synthesizeJsonTask(req))
         : this.synthesizeTextResponse(req);
     const latencyMs = Math.max(1, Date.now() - start);
     const promptTokens = estimateTokens(req.prompt + (req.systemInstruction || ''));
-    const completionTokens = estimateTokens(text);
+    const completionTokens = estimateTokens(text || (toolCalls ? JSON.stringify(toolCalls) : ''));
     return {
       text,
       runtime: 'embedded',
@@ -778,19 +930,64 @@ test('handles empty payload gracefully', () => {
       completionTokens,
       latencyMs,
       tokensPerSec: Number(((completionTokens / latencyMs) * 1000).toFixed(1)),
+      finishReason: toolCalls && toolCalls.length > 0 ? 'tool_calls' : 'stop',
+      ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
     };
   }
 
   async *stream(req: InferenceRequest, modelId = 'neo-embedded-core-v1'): InferenceStream {
     const res = await this.generate(req, modelId);
-    // Stream in clean word-group chunks for genuine SSE progressive rendering
+    if (res.toolCalls && res.toolCalls.length > 0) {
+      for (let idx = 0; idx < res.toolCalls.length; idx++) {
+        const tc = res.toolCalls[idx];
+        yield {
+          type: 'delta',
+          text: '',
+          toolCallDelta: {
+            index: idx,
+            id: tc.id,
+            name: tc.name,
+            argumentsDelta: JSON.stringify(tc.arguments),
+          },
+        };
+      }
+      yield { type: 'done', response: res };
+      return;
+    }
     const words = res.text.split(/(\s+)/);
     for (let i = 0; i < words.length; i += 6) {
+      if (req.signal?.aborted) {
+        throw new DOMException('Inference stream aborted', 'AbortError');
+      }
       const piece = words.slice(i, i + 6).join('');
       if (piece) yield { type: 'delta', text: piece };
     }
     yield { type: 'done', response: res };
   }
+}
+
+function buildToolArgsFromPrompt(parametersSchema: Record<string, unknown>, query: string): Record<string, unknown> {
+  const props = (parametersSchema?.properties && typeof parametersSchema.properties === 'object'
+    ? parametersSchema.properties
+    : {}) as Record<string, { type?: string }>;
+  const out: Record<string, unknown> = {};
+  for (const [key, def] of Object.entries(props)) {
+    if (key === 'query' || key === 'q' || key === 'text' || key === 'input' || key === 'expression') {
+      out[key] = query.slice(0, 240);
+    } else if (def?.type === 'number' || def?.type === 'integer') {
+      const m = query.match(/-?\d+(?:\.\d+)?/);
+      out[key] = m ? Number(m[0]) : 0;
+    } else if (def?.type === 'boolean') {
+      out[key] = false;
+    } else if (def?.type === 'array') {
+      out[key] = [];
+    } else if (def?.type === 'object') {
+      out[key] = {};
+    } else {
+      out[key] = query.slice(0, 120);
+    }
+  }
+  return out;
 }
 
 function safeExtractJson(text: string): Record<string, unknown> | null {

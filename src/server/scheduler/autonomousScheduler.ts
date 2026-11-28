@@ -4,7 +4,7 @@ import { getDb } from '../db/adapter.ts';
 import { evaluateSkill, runCodeEvolutionProposal } from '../evolution/pipeline.ts';
 import { runMemoryConsolidation } from '../knowledge/consolidation.ts';
 import { knowledgeDaemon } from '../knowledge/daemon.ts';
-import { runModelBenchmarkSuite } from '../inference/evaluator.ts';
+import { runModelBenchmarkSuite, runSystemEvaluationSuite } from '../inference/evaluator.ts';
 
 class AutonomousScheduler {
   private timer: NodeJS.Timeout | null = null;
@@ -50,12 +50,17 @@ class AutonomousScheduler {
         return { evaluated: results.length, passed: results.filter((r) => r.passed).length };
       }
       case 'system_diagnostics': {
-        const evalRecord = await runModelBenchmarkSuite('neo-embedded-core-v1');
+        const [evalRecord, systemEval] = await Promise.all([
+          runModelBenchmarkSuite('neo-embedded-core-v1'),
+          runSystemEvaluationSuite({ persistRecord: true }),
+        ]);
         return {
           modelId: evalRecord.model_id,
           overallScore: evalRecord.overall_score,
           passedCases: evalRecord.passed_cases,
           totalCases: evalRecord.total_cases,
+          systemEvalScore: systemEval.evaluation.overall_score,
+          systemEvalDelta: systemEval.scoreDelta,
         };
       }
       case 'evolution_proposals': {

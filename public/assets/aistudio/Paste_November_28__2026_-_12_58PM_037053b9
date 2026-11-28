@@ -1,0 +1,1028 @@
+# NeoSI — Complete Intelligence Architecture Upgrade
+## Autonomous Intelligence, Continuous Knowledge, Self-Improvement & Neo OS Integration
+
+You are the principal AI systems architect, senior software engineer, security engineer, machine-learning infrastructure engineer, and autonomous-agent developer responsible for evolving NeoSI.
+
+Repository: `itispourya/NeoSI`
+
+Your mission is to perform a complete, evidence-based examination of the repository's CURRENT STATE and then upgrade NeoSI into a production-grade, extensible, continuously learning, self-evaluating AI intelligence platform capable of becoming the primary AI engine of Neo OS (Neos).
+
+This is an implementation task, not a theoretical architecture proposal.
+
+Do not merely write recommendations, roadmaps, documentation, or code snippets. Inspect the repository, implement the necessary changes, run tests, fix failures, and commit the completed work to the appropriate branch if repository permissions allow.
+
+Do not assume previous reports, commit descriptions, or architectural claims are accurate. Verify everything directly against the current repository.
+
+---
+
+# 1. PRIMARY OBJECTIVE
+
+Transform NeoSI into an extensible AI system capable of:
+
+- Supporting multiple AI models and inference providers.
+- Reasoning over complex requests.
+- Planning and executing multi-step tasks.
+- Maintaining persistent, structured, searchable knowledge.
+- Continuously acquiring new knowledge from trusted online sources.
+- Evaluating the quality and reliability of acquired knowledge.
+- Learning from task outcomes, feedback, and errors.
+- Improving its prompts, strategies, tools, workflows, and internal capabilities.
+- Developing new tools and capabilities within a controlled environment.
+- Integrating deeply with Neos and its business modules.
+- Acting as an AI assistant, analyst, agent, automation engine, and intelligent business operator.
+- Supporting multiple users, tenants, workspaces, languages, and permission boundaries.
+- Running with local models, cloud models, or hybrid configurations.
+- Operating reliably as a production service.
+
+NeoSI must become a model-independent intelligence platform rather than a wrapper around a single LLM.
+
+---
+
+# 2. FIRST: COMPLETE REPOSITORY AUDIT
+
+Before changing code:
+
+1. Inspect the current HEAD commit, default branch, all relevant branches, and recent commit history.
+2. Inspect the complete repository tree.
+3. Read package.json, lockfiles, TypeScript configuration, Docker configuration, CI workflows, environment configuration, database schemas, migrations, tests, and documentation.
+4. Inspect all backend modules, routes, runtime providers, AI orchestration, reasoning, memory, RAG, tools, security, authentication, admin interfaces, and frontend components.
+5. Identify unfinished, disconnected, mocked, duplicated, broken, or partially implemented features.
+6. Verify whether all imports resolve.
+7. Verify dependency and lockfile consistency.
+8. Identify existing functionality that must not be broken.
+9. Inspect all current CI failures and warnings.
+10. Create a detailed internal architectural map before making significant changes.
+
+Do not rely on previous audit reports.
+
+Specifically verify the reported issues involving:
+
+- `src/server/neo/sovereignEngine.ts`
+- Its imports and dependent modules.
+- `bun.lock`
+- `package.json`
+- `src/server/routes/openaiCompat.ts`
+- `src/server/cognitive/reasoning.ts`
+- Runtime/provider integrations.
+- Docker configuration.
+- Existing tests and GitHub Actions.
+
+If a reported problem has already been fixed, do not reintroduce it.
+
+If a file or feature has intentionally been removed, do not blindly restore it. Determine whether its functionality should be restored, redesigned, or removed from its dependents.
+
+---
+
+# 3. ARCHITECTURE: MODULAR INTELLIGENCE CORE
+
+Create or complete a clean modular architecture.
+
+The system should have clearly separated components such as:
+
+- Intelligence Core
+- Model Provider Registry
+- Model Router
+- Inference Runtime
+- Reasoning Engine
+- Agent Planner
+- Agent Executor
+- Tool Registry
+- Tool Execution Sandbox
+- Knowledge Acquisition Engine
+- Knowledge Validation Engine
+- Knowledge Base
+- Long-Term Memory
+- Short-Term / Session Memory
+- Retrieval and RAG Engine
+- Embedding Provider
+- Evaluation Engine
+- Self-Improvement Engine
+- Workflow Engine
+- Scheduler
+- Observability
+- Security and Policy Engine
+- Neos Integration Layer
+- API Gateway
+- Admin and Management Interfaces
+
+Use the existing architecture when appropriate. Do not unnecessarily rewrite stable code.
+
+Every module should have clear responsibilities, interfaces, error handling, testability, and dependency boundaries.
+
+Avoid creating an excessively fragmented architecture or unnecessary abstractions.
+
+---
+
+# 4. MULTI-MODEL INTELLIGENCE
+
+Implement or complete a provider-independent AI model abstraction.
+
+Support configurable inference providers, including:
+
+- OpenAI-compatible APIs
+- Ollama
+- vLLM
+- Compatible local inference servers
+- Cloud inference endpoints
+- Future providers through plugins/adapters
+
+Requirements:
+
+- Model discovery where supported.
+- Configurable model aliases.
+- Provider health monitoring.
+- Connection testing.
+- Timeouts.
+- Retries with exponential backoff and jitter.
+- Rate-limit handling.
+- Circuit breakers.
+- Fallback providers.
+- Streaming.
+- Structured outputs.
+- Tool/function calling where supported.
+- Model capability detection.
+- Context-window awareness.
+- Token and cost estimation.
+- Latency tracking.
+- Model performance tracking.
+- Privacy-aware routing.
+- Per-task model selection.
+- Configuration without code modifications.
+
+Create a model-routing policy that can choose an appropriate model according to:
+
+- Task complexity.
+- Required reasoning capability.
+- Tool-calling requirements.
+- Language.
+- Context length.
+- Privacy constraints.
+- Availability.
+- Latency.
+- Cost.
+- User or workspace configuration.
+
+Simple tasks should not automatically consume the most expensive model.
+
+Complex tasks should be able to escalate to stronger models.
+
+The system must not assume all providers support the same features. Implement capability-aware fallbacks.
+
+---
+
+# 5. ADVANCED REASONING AND AGENT PLANNING
+
+Upgrade the reasoning system into a robust task-orchestration engine.
+
+The AI should be able to:
+
+1. Understand user intent.
+2. Identify constraints.
+3. Determine missing information.
+4. Decide whether the request requires tools, retrieval, external research, or direct reasoning.
+5. Build a structured execution plan.
+6. Break complex tasks into subtasks.
+7. Determine task dependencies.
+8. Select appropriate tools and models.
+9. Execute steps.
+10. Observe tool results.
+11. Verify results.
+12. Revise its plan when necessary.
+13. Recover from failures.
+14. Detect loops and stop unproductive execution.
+15. Produce a clear final response with evidence when available.
+
+Implement:
+
+- Planning and replanning.
+- Task state management.
+- Execution checkpoints.
+- Task cancellation.
+- Maximum step and execution budgets.
+- Timeouts.
+- Retry policies.
+- Failure classification.
+- Dependency tracking.
+- Result verification.
+- Context compression.
+- Progress reporting.
+- Durable task persistence where appropriate.
+
+Do not create infinite autonomous loops.
+
+Every agent task must have configurable limits for execution time, steps, cost, and tool usage.
+
+---
+
+# 6. CONTINUOUS ONLINE KNOWLEDGE ACQUISITION
+
+Build a real knowledge-acquisition subsystem.
+
+NeoSI must be capable of scheduled research and knowledge updates from online sources.
+
+Support configurable source types such as:
+
+- Search engines.
+- Public websites.
+- Official documentation.
+- RSS/Atom feeds.
+- Technical publications.
+- Public APIs.
+- GitHub repositories and release information.
+- Approved industry sources.
+- User-configured sources.
+
+Implement a pipeline:
+
+Discovery
+→ Fetch
+→ Parse
+→ Normalize
+→ Deduplicate
+→ Classify
+→ Extract
+→ Validate
+→ Score
+→ Store
+→ Index
+→ Evaluate
+→ Publish into the usable knowledge system.
+
+Every stored knowledge item should retain appropriate metadata:
+
+- Source URL.
+- Source title.
+- Publisher or domain.
+- Publication date, if available.
+- Acquisition timestamp.
+- Content type.
+- Language.
+- Topics.
+- Extracted facts.
+- Confidence.
+- Reliability score.
+- Version.
+- Expiration or review date where appropriate.
+- Content hash.
+- Provenance.
+- Verification status.
+
+Requirements:
+
+- Avoid duplicate ingestion.
+- Detect outdated content.
+- Identify contradictions.
+- Preserve source provenance.
+- Distinguish facts, opinions, predictions, and unverified claims.
+- Use multiple sources to verify important claims.
+- Support knowledge expiration and revalidation.
+- Provide searchable and retrievable knowledge.
+- Support multiple languages.
+- Allow administrators to configure trusted and blocked domains.
+- Allow source-level quality policies.
+- Support incremental updates rather than repeatedly ingesting entire sources.
+
+Online knowledge must never be treated as automatically trustworthy.
+
+Implement source reliability evaluation and confidence-aware retrieval.
+
+---
+
+# 7. REAL LEARNING SYSTEM
+
+Do not falsely describe RAG, memory storage, or prompt changes as model training.
+
+Implement a layered learning architecture with clearly distinguished mechanisms:
+
+### Layer 1 — Knowledge Learning
+
+Acquire, validate, index, and retrieve new information from approved sources.
+
+### Layer 2 — Memory Learning
+
+Store useful information from interactions, task outcomes, and user feedback.
+
+Memory must be structured and support:
+
+- Episodic memory.
+- Semantic memory.
+- Task memory.
+- User preferences.
+- Workspace/business context.
+- Operational memory.
+- Knowledge provenance.
+- Retention policies.
+- Memory expiration.
+- Tenant isolation.
+- Privacy and deletion controls.
+
+### Layer 3 — Behavioral Learning
+
+Evaluate past performance and improve:
+
+- Planning strategies.
+- Tool-selection policies.
+- Prompt templates.
+- Workflow decisions.
+- Retrieval strategies.
+- Model-routing policies.
+- Error recovery.
+
+Use versioned changes and evaluation results.
+
+### Layer 4 — Model Adaptation
+
+Design an optional architecture for future fine-tuning, LoRA, adapter training, or other model adaptation when compatible training infrastructure and datasets exist.
+
+Do not pretend model weights are being trained if the system is not actually performing training.
+
+Do not require model training for the core platform to function.
+
+---
+
+# 8. SELF-EVALUATION ENGINE
+
+Create an independent evaluation subsystem.
+
+Evaluate AI performance using:
+
+- Task success.
+- Answer correctness.
+- Tool execution success.
+- Retrieval relevance.
+- Source quality.
+- Factual consistency.
+- Hallucination indicators.
+- Completeness.
+- User feedback.
+- Latency.
+- Cost.
+- Security-policy compliance.
+- Reproducibility where possible.
+
+Implement:
+
+- Evaluation datasets.
+- Regression tests.
+- Benchmark suites.
+- Automated evaluation workflows.
+- Version comparisons.
+- Quality metrics.
+- Evaluation history.
+- Failure analysis.
+- Improvement recommendations.
+
+Where possible, use deterministic checks rather than relying entirely on another LLM to judge the result.
+
+Do not let the system automatically declare itself successful without independent measurable criteria.
+
+---
+
+# 9. SAFE SELF-IMPROVEMENT ENGINE
+
+Build a real, controlled self-improvement pipeline.
+
+The system should be able to identify weaknesses and propose improvements to:
+
+- Prompts.
+- Tool descriptions.
+- Tool implementations.
+- Planning strategies.
+- Retrieval configuration.
+- Knowledge acquisition policies.
+- Workflow definitions.
+- Model routing.
+- Internal code modules.
+- Tests.
+- Documentation.
+
+The self-improvement process must follow:
+
+Observe
+→ Identify weakness
+→ Create hypothesis
+→ Propose change
+→ Implement in isolated workspace
+→ Run tests
+→ Run security checks
+→ Run benchmarks
+→ Compare with current version
+→ Generate improvement report
+→ Approve or reject
+→ Deploy approved version
+→ Monitor
+→ Roll back if necessary.
+
+Implement versioned artifacts and maintain a full audit history.
+
+Self-modification must never bypass:
+
+- Authentication.
+- Authorization.
+- Security policies.
+- Test requirements.
+- Sandbox restrictions.
+- Deployment approval rules.
+- Production safeguards.
+
+Autonomous code changes should be isolated from the live production system.
+
+Production changes must require configurable approval policies.
+
+Support automatic deployment only for explicitly designated low-risk changes with strict validation, if appropriate.
+
+Never permit uncontrolled rewriting of the entire system.
+
+---
+
+# 10. TOOL DEVELOPMENT AND EXECUTION
+
+Implement a robust extensible tool architecture.
+
+Tools should have:
+
+- Unique IDs.
+- Names.
+- Descriptions.
+- Versioning.
+- Typed schemas.
+- Input validation.
+- Output schemas.
+- Permissions.
+- Risk classification.
+- Timeout settings.
+- Execution limits.
+- Audit records.
+- Error handling.
+- Health information.
+- Test coverage.
+
+Support internal tools, external APIs, plugins, and future MCP-compatible integrations where appropriate.
+
+Implement safe tool execution.
+
+Potentially dangerous operations must require appropriate authorization or confirmation.
+
+Never expose unrestricted shell, filesystem, database, network, or code execution to an AI model.
+
+Use sandboxed execution, allowlists, resource limits, and explicit permissions.
+
+Treat tool output and external content as untrusted input.
+
+---
+
+# 11. DEEP NEOS INTEGRATION
+
+NeoSI must become a first-class AI subsystem of Neo OS.
+
+Build a dedicated integration architecture rather than hardcoding business logic into the AI.
+
+Requirements:
+
+- Versioned integration API.
+- Secure authentication.
+- Tenant/workspace isolation.
+- User permission propagation.
+- Tool discovery.
+- Capability discovery.
+- Module discovery.
+- Structured request and response contracts.
+- Context injection.
+- Session management.
+- Business context retrieval.
+- Task execution.
+- Event integration.
+- Workflow integration.
+- Audit logging.
+- Error handling.
+- Compatibility versioning.
+
+NeoSI should be capable of discovering available Neos capabilities through an API or registry.
+
+Do not assume every Neos module exists or is accessible.
+
+Implement capability-based integration so new Neos modules can become available to NeoSI without rewriting the Intelligence Core.
+
+Business operations must respect the same authorization rules as the underlying Neos application.
+
+Examples of future tool capabilities:
+
+- Search customers.
+- Retrieve sales reports.
+- Analyze inventory.
+- Create draft invoices.
+- Compare suppliers.
+- Analyze purchasing patterns.
+- Generate reports.
+- Search business documents.
+- Summarize business activity.
+- Create workflows.
+- Prepare transactions.
+- Perform authorized actions.
+
+Destructive or financially sensitive actions must have appropriate confirmation, authorization, validation, and audit requirements.
+
+The AI must not bypass Neos business rules.
+
+---
+
+# 12. OPENAI-COMPATIBLE API AND SDK
+
+Preserve and improve the existing OpenAI-compatible interface.
+
+Ensure that the implementation supports the features actually claimed by the API:
+
+- Chat completions.
+- Streaming.
+- Model listing.
+- Tool calling.
+- Structured outputs where supported.
+- Error compatibility.
+- Authentication.
+- Request limits.
+- Context handling.
+- Cancellation.
+- Timeouts.
+- Usage metadata.
+- Health checks.
+
+Avoid breaking existing Neos integrations.
+
+Provide a documented integration contract and compatibility tests.
+
+Where useful, support a dedicated NeoSI API in addition to OpenAI-compatible endpoints.
+
+Do not expose internal administration endpoints through the public AI API.
+
+---
+
+# 13. MEMORY, RAG, AND KNOWLEDGE RETRIEVAL
+
+Upgrade retrieval to a production-grade architecture.
+
+Support:
+
+- Vector retrieval.
+- Lexical search.
+- Hybrid retrieval.
+- Metadata filtering.
+- Tenant isolation.
+- Re-ranking where appropriate.
+- Query rewriting.
+- Context selection.
+- Citation/provenance.
+- Relevance scoring.
+- Deduplication.
+- Version-aware retrieval.
+- Retrieval diagnostics.
+
+Ensure the AI can distinguish:
+
+- Knowledge from memory.
+- User context from global knowledge.
+- Business context from public knowledge.
+- Verified information from unverified information.
+- Current data from outdated data.
+
+Do not leak information between users, tenants, or workspaces.
+
+---
+
+# 14. MULTILINGUAL INTELLIGENCE
+
+Maintain and improve support for:
+
+- English.
+- Persian.
+- Arabic.
+- Dutch.
+
+The system must support multilingual:
+
+- Conversations.
+- Knowledge ingestion.
+- Retrieval.
+- Tool descriptions.
+- User context.
+- Memory.
+- Reports.
+- UI.
+- Error messages.
+
+Do not assume all languages are written left-to-right.
+
+Maintain appropriate RTL behavior for Persian and Arabic.
+
+Allow future languages to be added through configuration and localization architecture.
+
+---
+
+# 15. SECURITY AND PRIVACY
+
+Perform a complete security audit.
+
+Review:
+
+- Authentication.
+- Session security.
+- API keys.
+- Secrets.
+- Admin access.
+- Tenant isolation.
+- Data access.
+- Tool permissions.
+- SSRF.
+- Injection.
+- Prompt injection.
+- Malicious documents.
+- Malicious websites.
+- Sandbox escape risks.
+- Unrestricted execution.
+- File access.
+- Network access.
+- Rate limiting.
+- Abuse prevention.
+- Sensitive information exposure.
+- PII handling.
+- Logging.
+- Database access.
+- Dependency vulnerabilities.
+- Docker security.
+- Production configuration.
+
+Implement the necessary fixes.
+
+Never allow online content, documents, webpages, retrieved memories, or tool outputs to override the system's security policy.
+
+Implement defense against indirect prompt injection.
+
+Ensure external research cannot silently authorize financial, destructive, administrative, or sensitive actions.
+
+Never expose secrets in responses, logs, traces, status endpoints, or frontend code.
+
+---
+
+# 16. RELIABILITY AND PRODUCTION OPERATIONS
+
+Implement or improve:
+
+- Health checks.
+- Readiness checks.
+- Provider health checks.
+- Graceful shutdown.
+- Database migration safety.
+- Retry policies.
+- Circuit breakers.
+- Structured logging.
+- Metrics.
+- Tracing.
+- Error reporting.
+- Background job persistence.
+- Job recovery.
+- Task cancellation.
+- Queue management.
+- Concurrency limits.
+- Resource limits.
+- Rate limiting.
+- Caching.
+- Cleanup jobs.
+- Backup guidance.
+- Disaster recovery guidance.
+
+Background learning and research tasks must not interfere with interactive Neos operations.
+
+Prioritize business-critical tasks over background learning.
+
+Make the scheduler configurable.
+
+Ensure long-running tasks survive restarts where required.
+
+---
+
+# 17. ADMIN CONTROL CENTER
+
+Implement or improve the administration interface for managing NeoSI.
+
+Administrators should be able to inspect and control:
+
+- AI providers.
+- Models.
+- Model routing.
+- Provider health.
+- API connectivity.
+- Memory.
+- Knowledge sources.
+- Knowledge acquisition jobs.
+- Learning jobs.
+- Evaluations.
+- Benchmarks.
+- Agent tasks.
+- Tool registry.
+- Tool permissions.
+- Plugins.
+- Integrations.
+- Scheduled tasks.
+- Self-improvement proposals.
+- Version history.
+- Deployment status.
+- Audit logs.
+- Costs.
+- Token usage.
+- Performance.
+- Errors.
+- Security status.
+
+Provide clear operational visibility.
+
+Do not expose sensitive credentials in the interface.
+
+Implement safe configuration handling and validation.
+
+---
+
+# 18. TESTING REQUIREMENTS
+
+Create meaningful tests for all newly implemented systems.
+
+At minimum:
+
+### Unit tests
+
+- Provider adapters.
+- Model routing.
+- Reasoning.
+- Planner.
+- Tool registry.
+- Tool permissions.
+- Memory.
+- Retrieval.
+- Knowledge ingestion.
+- Knowledge validation.
+- Self-evaluation.
+- Self-improvement.
+- Scheduler.
+- Security policies.
+
+### Integration tests
+
+- AI provider integration using mocked and local test providers.
+- OpenAI-compatible API.
+- Streaming.
+- Tool execution.
+- Memory persistence.
+- Knowledge acquisition pipeline.
+- Retrieval pipeline.
+- Neos integration.
+- Authentication.
+- Tenant isolation.
+- Database migrations.
+- Background jobs.
+
+### Security tests
+
+- Prompt injection.
+- SSRF.
+- Unauthorized tool execution.
+- Tenant data leakage.
+- Malicious tool input.
+- Secret exposure.
+- Permission bypass.
+- Unsafe self-modification.
+- Sandbox restrictions.
+
+### Regression tests
+
+Protect existing functionality.
+
+### End-to-end tests
+
+Demonstrate a complete workflow:
+
+User request
+→ Intent analysis
+→ Planning
+→ Knowledge retrieval
+→ Neos tool discovery
+→ Authorized tool execution
+→ Result verification
+→ Final response.
+
+Also demonstrate:
+
+Online source discovery
+→ Knowledge ingestion
+→ Validation
+→ Storage
+→ Retrieval in a later conversation.
+
+And:
+
+Failed task
+→ Evaluation
+→ Improvement proposal
+→ Isolated change
+→ Tests
+→ Benchmark comparison
+→ Approval workflow.
+
+Do not use fake test results or claim integrations were tested when they were only mocked.
+
+---
+
+# 19. DEPENDENCIES AND INFRASTRUCTURE
+
+Use stable and appropriate technologies.
+
+Do not add unnecessary dependencies.
+
+Check:
+
+- Package manifest.
+- Lockfile.
+- Runtime compatibility.
+- Bun compatibility.
+- Node compatibility.
+- Docker compatibility.
+- CI compatibility.
+- Database migrations.
+- Dependency vulnerabilities.
+
+Ensure clean installation works with frozen lockfiles.
+
+Ensure development and production dependency boundaries are correct.
+
+Do not introduce dependencies that require unavailable paid services for core functionality.
+
+The system must remain usable with an appropriately configured local inference provider.
+
+Cloud models and paid APIs should be optional integrations.
+
+---
+
+# 20. DOCUMENTATION
+
+Update and create complete documentation.
+
+Required documents should cover:
+
+- Architecture.
+- Installation.
+- Development.
+- Production deployment.
+- Environment variables.
+- AI providers.
+- Model configuration.
+- Model routing.
+- API usage.
+- OpenAI compatibility.
+- SDK usage.
+- Neos integration.
+- Tool development.
+- Plugin development.
+- Memory.
+- RAG.
+- Knowledge acquisition.
+- Online learning.
+- Evaluation.
+- Self-improvement.
+- Security.
+- Permissions.
+- Docker.
+- CI.
+- Testing.
+- Troubleshooting.
+- Limitations.
+- Upgrade and migration procedures.
+
+Documentation must describe actual implemented behavior, not future aspirations.
+
+---
+
+# 21. IMPLEMENTATION STRATEGY
+
+Do not attempt a destructive rewrite.
+
+Work incrementally:
+
+Phase 1 — Repository audit and existing failures.
+
+Phase 2 — Architecture and reliability foundations.
+
+Phase 3 — Model providers and model routing.
+
+Phase 4 — Reasoning and agent orchestration.
+
+Phase 5 — Memory and retrieval.
+
+Phase 6 — Online knowledge acquisition.
+
+Phase 7 — Evaluation and behavioral learning.
+
+Phase 8 — Controlled self-improvement.
+
+Phase 9 — Tool architecture and sandbox.
+
+Phase 10 — Neos integration.
+
+Phase 11 — Admin interface and observability.
+
+Phase 12 — Security hardening.
+
+Phase 13 — Tests, documentation, CI, and deployment.
+
+You may change the order when dependencies require it.
+
+Do not stop after producing a plan.
+
+After the audit, begin implementation immediately.
+
+If the task is too large for one uninterrupted operation, maintain a persistent implementation checklist and continue until all feasible tasks are complete.
+
+Prioritize complete, working functionality over superficial feature additions.
+
+---
+
+# 22. STRICT ENGINEERING RULES
+
+- Do not remove existing working features without justification.
+- Do not silently break APIs.
+- Do not use fake implementations to make tests pass.
+- Do not use placeholder responses as real AI capabilities.
+- Do not claim autonomous learning if only static prompts exist.
+- Do not claim model training if no training occurs.
+- Do not claim Neos integration if only a generic API endpoint exists.
+- Do not leave critical TODOs.
+- Do not suppress errors without addressing their causes.
+- Do not weaken security to make integrations easier.
+- Do not disable tests to achieve a green CI result.
+- Do not hardcode secrets.
+- Do not bypass authorization.
+- Do not expose unrestricted execution to the AI.
+- Do not create uncontrolled self-modification.
+- Do not introduce infinite agent loops.
+- Do not overengineer.
+- Maintain code quality and architectural consistency.
+- Prefer real, tested implementations.
+- Maintain backward compatibility wherever possible.
+
+---
+
+# 23. FINAL VERIFICATION
+
+Before declaring the upgrade complete, run every relevant check available in the repository.
+
+At minimum:
+
+- Frozen dependency installation.
+- Type checking.
+- Linting.
+- Unit tests.
+- Integration tests.
+- Security tests.
+- Production build.
+- Docker build.
+- Docker Compose validation.
+- Container smoke tests.
+- API tests.
+- Database migration tests.
+- Neos integration tests.
+- GitHub Actions CI.
+
+Fix failures instead of merely reporting them.
+
+If an external service or environment limitation prevents a test, clearly identify exactly what was not tested and why.
+
+Do not claim all tests passed unless the actual results confirm it.
+
+---
+
+# 24. COMPLETION REPORT
+
+When implementation is complete, provide a concise but precise report containing:
+
+1. Repository state before the upgrade.
+2. Critical problems discovered.
+3. Architecture changes.
+4. New capabilities implemented.
+5. Features completed.
+6. Features partially implemented.
+7. Features still requiring external infrastructure.
+8. Files and modules changed.
+9. Database changes.
+10. Security improvements.
+11. Tests executed and exact results.
+12. CI status and link.
+13. Latest commit SHA.
+14. Deployment instructions.
+15. Required environment variables.
+16. How to connect NeoSI to Neos.
+17. How to configure local and cloud AI providers.
+18. How continuous knowledge acquisition works.
+19. How self-improvement works and what safeguards exist.
+20. Remaining limitations.
+
+The ultimate objective is to deliver a real, functional, secure, extensible AI intelligence platform that can serve as the primary AI engine for Neo OS.
+
+Do not declare success based on architectural plans.
+
+Declare success only for functionality that has actually been implemented, verified, and tested.

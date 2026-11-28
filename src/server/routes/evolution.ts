@@ -5,11 +5,15 @@ import { getDb } from '../db/adapter.ts';
 import {
   approveCodeUpgrade,
   prepareAndRunTrainingJob,
+  promoteBehavioralPolicy,
+  proposeBehavioralPolicy,
   rejectCodeUpgrade,
+  rollbackBehavioralPolicy,
   rollbackCodeUpgrade,
   runCodeEvolutionProposal,
   runConfigExperiment,
 } from '../evolution/pipeline.ts';
+import { runSystemEvaluationSuite, SYSTEM_EVAL_SUITE_VERSION } from '../inference/evaluator.ts';
 import { requireAdminConsoleAuth } from '../security/auth.ts';
 import { asyncHandler } from '../security/headers.ts';
 
@@ -17,17 +21,64 @@ export const evolutionRouter = Router();
 
 evolutionRouter.get('/evolution', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
   const db = await getDb();
-  const [proposals, experiments, trainingJobs] = await Promise.all([
+  const [proposals, experiments, trainingJobs, behavioralPolicies, evaluations] = await Promise.all([
     db.listUpgrades(),
     db.listEvolutionExperiments(40),
     db.listTrainingJobs(req.neoAuth!.tenant.id, 30),
+    db.listBehavioralPolicies(20),
+    db.listModelEvaluations(undefined, 20),
   ]);
   res.json({
     proposals,
     experiments,
     trainingJobs,
+    behavioralPolicies,
+    evaluations: evaluations.filter((e) => e.suite_version === SYSTEM_EVAL_SUITE_VERSION),
     autoMergeEnabled: env.autoMergeSafeUpgrades,
   });
+}));
+
+evolutionRouter.post('/evolution/evaluate', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
+  const modelId = typeof req.body?.modelId === 'string' ? req.body.modelId : undefined;
+  const result = await runSystemEvaluationSuite({ modelId });
+  res.status(201).json(result);
+}));
+
+const behavioralPolicySchema = z.object({
+  title: z.string().min(3).max(160),
+  hypothesis: z.string().min(4).max(400),
+  patch: z.object({
+    ragTopK: z.number().int().min(1).max(12).optional(),
+    minReliability: z.number().min(0.1).max(0.95).optional(),
+    maxPlanSteps: z.number().int().min(4).max(20).optional(),
+    preferLocalForPrivate: z.boolean().optional(),
+    systemDirectiveSuffix: z.string().max(600).optional(),
+  }),
+  autoPromote: z.boolean().optional(),
+});
+
+evolutionRouter.post('/evolution/policies', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
+  const parsed = behavioralPolicySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid behavioral policy proposal', issues: parsed.error.issues });
+  const result = await proposeBehavioralPolicy(parsed.data);
+  res.status(201).json(result);
+}));
+
+evolutionRouter.post('/evolution/policies/:id/promote', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
+  try {
+    const policy = await promoteBehavioralPolicy(String(req.params.id));
+    if (!policy) return res.status(404).json({ error: 'Behavioral policy not found' });
+    return res.json({ policy });
+  } catch (err) {
+    return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+}));
+
+evolutionRouter.post('/evolution/policies/rollback', requireAdminConsoleAuth, asyncHandler(async (req, res) => {
+  const targetId = typeof req.body?.targetId === 'string' ? req.body.targetId : undefined;
+  const policy = await rollbackBehavioralPolicy(targetId);
+  if (!policy) return res.status(404).json({ error: 'No prior behavioral policy available for rollback' });
+  return res.json({ policy });
 }));
 
 evolutionRouter.post('/evolution/diagnose', requireAdminConsoleAuth, asyncHandler(async (req, res) => {

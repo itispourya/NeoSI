@@ -2,11 +2,15 @@ import type {
   ApiKeyRecord,
   AuditLogRecord,
   BackgroundJobRecord,
+  BehavioralPolicyRecord,
+  BehavioralPolicyStatus,
   ConversationRecord,
   DynamicApiRecord,
   EvolutionExperimentRecord,
   GraphEntityRecord,
   GraphRelationshipRecord,
+  KnowledgePolicyRecord,
+  KnowledgePolicyRuleType,
   KnowledgeSourceRecord,
   LlmTelemetryRecord,
   MemoryRecord,
@@ -14,6 +18,9 @@ import type {
   MessageRecord,
   ModelEvaluationRecord,
   ModelRecord,
+  NeosApprovalRecord,
+  NeosApprovalStatus,
+  NeosCapabilityRecord,
   ObjectiveRecord,
   ObjectiveStatus,
   ResearchReportRecord,
@@ -313,4 +320,44 @@ export interface NeoDatabase {
   getAdminConfig(key: string): Promise<string | null>;
   setAdminConfig(key: string, value: string): Promise<void>;
   setAdminConfigIfAbsent(key: string, value: string): Promise<boolean>;
+
+  // Knowledge Policies (Trusted/Blocked Domains & Feed Sources)
+  listKnowledgePolicies(tenantId?: string, ruleType?: KnowledgePolicyRuleType): Promise<KnowledgePolicyRecord[]>;
+  upsertKnowledgePolicy(
+    input: Omit<KnowledgePolicyRecord, 'id' | 'created_at'>
+  ): Promise<KnowledgePolicyRecord>;
+  updateKnowledgePolicy(
+    id: string,
+    patch: Partial<Pick<KnowledgePolicyRecord, 'enabled' | 'min_reliability' | 'revalidation_hours' | 'etag' | 'last_modified' | 'last_fetched_at' | 'metadata'>>
+  ): Promise<KnowledgePolicyRecord | null>;
+  deleteKnowledgePolicy(id: string): Promise<boolean>;
+
+  // Behavioral Policies (Layer 3 Versioned Intelligence Policies)
+  listBehavioralPolicies(limit?: number): Promise<BehavioralPolicyRecord[]>;
+  getActiveBehavioralPolicy(): Promise<BehavioralPolicyRecord | null>;
+  createBehavioralPolicy(
+    input: Omit<BehavioralPolicyRecord, 'id' | 'created_at'>
+  ): Promise<BehavioralPolicyRecord>;
+  updateBehavioralPolicyStatus(
+    id: string,
+    status: BehavioralPolicyStatus,
+    candidateMetrics?: Record<string, unknown>
+  ): Promise<BehavioralPolicyRecord | null>;
+
+  // Deep Neos Capabilities & Human Confirmation Approvals
+  listNeosCapabilities(tenantId: string, enabledOnly?: boolean): Promise<NeosCapabilityRecord[]>;
+  upsertNeosCapability(
+    input: Omit<NeosCapabilityRecord, 'id' | 'created_at' | 'last_synced_at'>
+  ): Promise<NeosCapabilityRecord>;
+  deleteNeosCapability(id: string, tenantId: string): Promise<boolean>;
+  listNeosApprovals(tenantId: string, status?: NeosApprovalStatus, limit?: number): Promise<NeosApprovalRecord[]>;
+  getNeosApprovalById(id: string, tenantId: string): Promise<NeosApprovalRecord | null>;
+  createNeosApproval(
+    input: Omit<NeosApprovalRecord, 'id' | 'created_at' | 'decided_at'>
+  ): Promise<NeosApprovalRecord>;
+  updateNeosApproval(
+    id: string,
+    tenantId: string,
+    patch: Partial<Pick<NeosApprovalRecord, 'status' | 'decision_by' | 'decision_note' | 'execution_result' | 'decided_at'>>
+  ): Promise<NeosApprovalRecord | null>;
 }

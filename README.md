@@ -1,34 +1,33 @@
-# Neo — Autonomous Sovereign Cognitive Engine
+# NeoSI — Sovereign Cognitive & Neos AI Platform
 
-Neo is a self-hosted cognitive and agent runtime for local inference, tool execution, persistent memory, knowledge acquisition, and integration with Neos. It is designed to operate without a dependency on commercial hosted LLM APIs. Generative inference uses a configured local runtime such as Ollama, vLLM, TensorRT-LLM, or a compatible Transformers endpoint.
+NeoSI is a self-hosted, provider-independent cognitive and agent runtime for local LLM inference, OpenAI-compatible serving, durable tool execution, policy-governed knowledge acquisition, controlled self-evaluation, and deep integration with **Neos Cloud OS**.
 
 ## What is included
 
-- **Inference and model registry** — Local runtime adapters, hardware inspection, model registration, installation, runtime readiness probes, activation, rollback, and strict-target benchmarking.
-- **Cognitive services** — Intent classification, adaptive planning with an activated local reasoning model when available, schema- and permission-validated tool selection, deterministic fallback planning, reasoning orchestration, and evidence-aware critic checks.
-- **Agent runtime** — Persistent tasks, checkpoints, cancellation, recovery, permission-preserving resume, and explicit `completed`, `partial`, and `failed` outcomes.
-- **Memory and knowledge** — Typed memory, workspace-aware retrieval, temporal metadata, source provenance, consolidation, knowledge research, and tenant-validated graph relationships.
-- **Tool and API runtime** — Built-in tools, MCP JSON-RPC, API generation, and OpenAPI metadata.
-- **Evolution services** — Skill evaluation, experiments, upgrade proposals, code-generation evaluation, and training-data preparation.
-- **Security controls** — Scrypt admin credentials, console-only administration of shared system resources, scoped workspace API keys, rate limits, tenant-scoped data access, collision-safe workspace API slugs, DNS-pinned outbound requests, same-origin redirect policy, bounded response streaming, and fail-closed production code execution.
+- **Resilient multi-runtime inference & routing** — Adapters for `ollama`, `vllm`, `tensorrt-llm`, `transformers`, `custom-llm`, and CPU-native `embedded` fallback with `LlmRouter`, per-runtime circuit breakers, `429 Retry-After` exponential backoff, context-window trimming, live model discovery, and streaming cancellation.
+- **Full OpenAI-compatible gateway (`/v1/*` & `/api/v1/*`)** — `/v1/models` and `/v1/chat/completions` supporting streaming SSE chunks, `tools` / `tool_choice`, `response_format` (`json_object` / `json_schema`), multi-turn `tool` roles, connection probe fast-paths, and `en`/`fa`/`ar`/`nl` conversation directives.
+- **Cognitive engine & durable agents** — Policy-driven `ReasoningEngine`, adaptive model-assisted + deterministic fallback `TaskPlanner`, failure-classified `AgentRuntime` with evidence compression and replanning, `CriticEngine`, and idle-aware `AutonomousScheduler`.
+- **Policy-governed memory & continuous knowledge** — 7-layer memory with `epistemic_status` and provenance tags, multilingual query normalization (`fa`/`ar`/`nl`/`en` + `NEO_EXTRA_LANGUAGES_JSON`), RSS/Atom/GitHub Releases feed polling with `ETag` + SHA-256 deduplication, domain allow/block governance, and RAG retrieval diagnostics.
+- **Self-evaluation & Layer 3 Behavioral Policies** — Reproducible `SystemEvalSuite` (`sys-eval-v2`), candidate-vs-baseline Behavioral Policy experiments (`candidate` -> `active` -> rollback), Layer C static security checks, and Layer D privacy-redacted JSONL dataset preparation.
+- **Deep Neos Cloud OS integration** — Contract manifest (`/api/v1/neos/contract`), tenant capability sync, schema-validated action dispatch with HMAC-signed webhooks, workspace context ingestion, and mandatory human confirmation queues (`neos_approvals`) for financial/destructive actions.
+- **Zero-trust security** — Scoped SHA-256 API keys (`neos_live_...`), HMAC-signed admin console sessions (`neo_adm_...`), strict tenant isolation, PII redaction, DNS-pinned SSRF protection, and prompt-injection wrapping.
 
 ## Important capability boundaries
 
-Neo's embedded CPU runtime is a deterministic symbolic fallback. It is not a general-purpose neural language model. For generative reasoning, connect a local model runtime and verify that the selected model is available there.
+- **Embedded runtime**: Neo's built-in CPU `embedded` runtime is a deterministic symbolic/RAG synthesis core, **not** a neural generative LLM. Connect `ollama`, `vllm`, `tensorrt-llm`, `transformers`, or `custom-llm` for full generative language inference.
+- **Layer D training preparation**: Training jobs prepare privacy-filtered JSONL datasets (`dataset_only` execution mode) for external LoRA/QLoRA trainers; NeoSI does not claim to fine-tune neural weights in-process.
+- **Sandbox execution**: In production (`NODE_ENV=production`), `NEO_SANDBOX_MODE=subprocess` disables arbitrary dynamic code execution; Docker isolation requires an explicitly configured Docker daemon.
 
-Embedding behavior depends on the configured embedding backend. A deterministic CPU fallback is useful for local operation, but should not be represented as equivalent to a trained multilingual embedding model.
+## Documentation
 
-The benchmark suite uses a small set of task-specific evaluators. It is useful for regression checks, but its scores are not a substitute for independent, standardized model evaluations. Strict-target execution prevents a benchmark from silently scoring a different fallback model.
+- [System Architecture](docs/ARCHITECTURE.md)
+- [Providers, Resilience & Routing](docs/PROVIDERS_AND_ROUTING.md)
+- [API & OpenAI Compatibility Reference](docs/API_AND_OPENAI.md)
+- [Knowledge Governance & Continuous Learning](docs/KNOWLEDGE_AND_LEARNING.md)
+- [Deep Neos Integration Contract](docs/NEOS_INTEGRATION.md)
+- [Security & Operations](docs/SECURITY_AND_OPERATIONS.md)
 
-The development subprocess runner is not an OS security boundary. In production, dynamic code execution is disabled unless Docker isolation is explicitly selected and a Docker daemon is actually available. If the Docker sandbox is requested but unavailable, Neo refuses execution instead of falling back to a normal subprocess.
-
-The planner uses a local reasoning model only when an active model is confirmed in a healthy configured runtime. Model-generated plans are constrained to registered tools, granted scopes, risk levels, and validated input schemas. When no usable model is available, Neo falls back to a deterministic bounded plan.
-
-Self-evolution features do not imply unrestricted autonomous production changes. Model activation requires runtime verification; proposals and code changes should remain subject to review, tests, and rollback controls. Configuration experiments are marked inconclusive until the candidate settings are actually applied. Code proposals are tested as standalone candidate modules in a temporary workspace; they are not full-repository integration tests or Git merges. Dataset preparation does not start model training or produce adapter weights.
-
-## Quickstart — local development
-
-Requirements: a recent Bun release and a supported Node.js runtime.
+## Quickstart & Validation
 
 ```bash
 cp .env.example .env
@@ -36,36 +35,10 @@ bun install
 bun run dev
 ```
 
-Open `http://localhost:3000`. On first setup, claim an administrator passcode containing at least 12 characters. In development, Neo can create an ephemeral session secret; sessions signed with an ephemeral secret do not survive process restarts.
-
-To use a generative local model, configure an available runtime endpoint in `.env`. The default embedded runtime is deterministic and does not download a model.
-
-## Production
-
-Set `NODE_ENV=production` and configure `NEO_SESSION_SECRET` with at least 32 bytes of unpredictable random data. For example:
-
-```bash
-openssl rand -hex 32
-```
-
-Also configure the database credentials, trusted proxy hop count, CORS origins, and model runtime endpoint for the deployment. Production startup fails if `NEO_SESSION_SECRET` is missing or shorter than 32 bytes. Do not use ephemeral session secrets in production.
-
-The default production Compose setup does not expose PostgreSQL or Redis to the public network; their published ports bind to host loopback. PostgreSQL and Redis both require credentials. Set `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, and `NEO_SESSION_SECRET` in the Compose `.env` file. For first-time admin setup, also set `NEO_ADMIN_SETUP_TOKEN` to at least 32 random bytes, or set `NEO_ADMIN_PASSCODE` (at least 12 characters) to disable passcode claiming and use direct login. The setup token is required to claim the initial admin passcode in production and is never returned by the status endpoint.
-
-```bash
-cp .env.example .env
-# Set POSTGRES_PASSWORD, REDIS_PASSWORD, NEO_SESSION_SECRET, and NEO_ADMIN_SETUP_TOKEN in .env before starting.
-docker compose --profile gpu-single up -d --build
-```
-
-Dynamic code execution remains disabled when `NEO_SANDBOX_MODE=subprocess` in production. Do not enable subprocess mode as a production isolation mechanism. A Docker sandbox requires a separately secured Docker daemon connection; the default Compose file does not mount the host Docker socket.
-
-## Validation
+Open `http://localhost:3000`, claim or sign in with your admin passcode, configure a runtime (or test `embedded`), and generate scoped `neos_live_...` keys for Neos or OpenAI clients.
 
 ```bash
 bun run lint
 bun run test
 bun run build
 ```
-
-GitHub Actions runs frozen dependency installation, typechecking, tests, frontend build, Docker image build, and a production-container health smoke test on branch pushes and pull requests.

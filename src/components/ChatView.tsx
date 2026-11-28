@@ -612,7 +612,7 @@ export function ChatView() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 max-w-full">
             <div className="inline-flex rounded border border-slate-800 bg-[#0B0F17] p-0.5">
               {(
                 [

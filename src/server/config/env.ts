@@ -114,6 +114,7 @@ export const env = {
     .split(',')
     .map((s) => s.trim().replace(/\/+$/, ''))
     .filter(Boolean),
+  extraLanguagesJson: stripQuotes(process.env.NEO_EXTRA_LANGUAGES_JSON),
 };
 
 export function getConfiguredSubsystems() {

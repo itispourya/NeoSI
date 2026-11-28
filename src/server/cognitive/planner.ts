@@ -39,10 +39,18 @@ interface AdaptivePlanCandidate {
  * If no local model is available or validation fails, a deterministic plan is used.
  */
 export class TaskPlanner {
-  private budgetsFor(autonomy: 'low' | 'balanced' | 'high'): PlanBudgets {
-    if (autonomy === 'high') return { maxSteps: 14, maxToolCalls: 10, maxDurationMs: 60_000 };
-    if (autonomy === 'low') return { maxSteps: 6, maxToolCalls: 4, maxDurationMs: 20_000 };
-    return { maxSteps: 10, maxToolCalls: 7, maxDurationMs: 35_000 };
+  private budgetsFor(autonomy: 'low' | 'balanced' | 'high', maxStepsOverride?: number): PlanBudgets {
+    const base =
+      autonomy === 'high'
+        ? { maxSteps: 14, maxToolCalls: 10, maxDurationMs: 60_000 }
+        : autonomy === 'low'
+        ? { maxSteps: 6, maxToolCalls: 4, maxDurationMs: 20_000 }
+        : { maxSteps: 10, maxToolCalls: 7, maxDurationMs: 35_000 };
+    if (typeof maxStepsOverride === 'number' && Number.isInteger(maxStepsOverride) && maxStepsOverride >= 4 && maxStepsOverride <= 20) {
+      base.maxSteps = maxStepsOverride;
+      base.maxToolCalls = Math.min(base.maxToolCalls, maxStepsOverride - 2);
+    }
+    return base;
   }
 
   private finalizePlan(gatherSteps: PlannedStep[], budgets: PlanBudgets): PlannedStep[] {
@@ -76,9 +84,9 @@ export class TaskPlanner {
     return normalized;
   }
 
-  buildPlan(goal: string, autonomy: 'low' | 'balanced' | 'high' = 'balanced'): TaskPlanResult {
+  buildPlan(goal: string, autonomy: 'low' | 'balanced' | 'high' = 'balanced', maxStepsOverride?: number): TaskPlanResult {
     const clean = goal.trim();
-    const budgets = this.budgetsFor(autonomy);
+    const budgets = this.budgetsFor(autonomy, maxStepsOverride);
     const gatherSteps: PlannedStep[] = [];
     const add = (step: Omit<PlannedStep, 'stepIndex'>) => {
       gatherSteps.push({ ...step, stepIndex: gatherSteps.length });
@@ -138,13 +146,94 @@ export class TaskPlanner {
     return { steps, budgets, valid: validation.valid, validationErrors: validation.errors };
   }
 
+  replanOnFailure(input: {
+    goal: string;
+    failedStep: { stepIndex: number; title: string; actionType: string; toolId?: string | null; input: Record<string, unknown> };
+    failureClass: string;
+    nextStepIndex: number;
+    existingToolsUsed: string[];
+    scopes: string[];
+  }): { strategy: 'substitute' | 'skip_to_synthesis' | 'abort'; replacementStep?: PlannedStep; reason: string } {
+    const { failedStep, failureClass, goal, nextStepIndex, existingToolsUsed, scopes } = input;
+    if (failureClass === 'permission_denied') {
+      return {
+        strategy: 'abort',
+        reason: `Step '${failedStep.title}' denied by scope/permission policy (${failureClass}).`,
+      };
+    }
+
+    const used = new Set(existingToolsUsed);
+    const canUseTool = (id: string): boolean => {
+      if (used.has(id)) return false;
+      const tool = toolRegistry.get(id);
+      if (!tool) return false;
+      return scopes.includes('admin') || tool.requiredScopes.every((s) => scopes.includes(s));
+    };
+
+    // Deterministic substitution paths for common failed gather tools
+    if (failedStep.toolId === 'web_research' && canUseTool('skill_lookup')) {
+      return {
+        strategy: 'substitute',
+        reason: 'External web research failed; falling back to local procedural skill registry.',
+        replacementStep: {
+          stepIndex: nextStepIndex,
+          title: 'Fallback: Local Skill & Procedure Lookup',
+          actionType: 'business_audit',
+          toolId: 'skill_lookup',
+          toolInput: { query: goal.slice(0, 180) },
+          dependsOn: [],
+        },
+      };
+    }
+
+    if (failedStep.toolId === 'web_research' && canUseTool('graph_query')) {
+      return {
+        strategy: 'substitute',
+        reason: 'External web research failed; falling back to local Knowledge Graph traversal.',
+        replacementStep: {
+          stepIndex: nextStepIndex,
+          title: 'Fallback: Knowledge Graph Query',
+          actionType: 'tool_call',
+          toolId: 'graph_query',
+          toolInput: { query: goal.slice(0, 140) },
+          dependsOn: [],
+        },
+      };
+    }
+
+    if (failedStep.actionType === 'tool_call' && failedStep.toolId !== 'memory_search' && canUseTool('memory_search')) {
+      return {
+        strategy: 'substitute',
+        reason: `Tool '${failedStep.toolId}' failed (${failureClass}); retrieving related memory context instead.`,
+        replacementStep: {
+          stepIndex: nextStepIndex,
+          title: 'Fallback: Semantic Memory Retrieval',
+          actionType: 'memory_search',
+          toolId: 'memory_search',
+          toolInput: { query: goal.slice(0, 180), limit: 5 },
+          dependsOn: [],
+        },
+      };
+    }
+
+    if (failedStep.actionType !== 'reason' && failedStep.actionType !== 'verify') {
+      return {
+        strategy: 'skip_to_synthesis',
+        reason: `Non-fatal gather step '${failedStep.title}' failed (${failureClass}); continuing synthesis with remaining verified evidence.`,
+      };
+    }
+
+    return { strategy: 'abort', reason: `Critical step '${failedStep.title}' failed (${failureClass}).` };
+  }
+
   async buildAdaptivePlan(
     goal: string,
     autonomy: 'low' | 'balanced' | 'high' = 'balanced',
     tenantId = 'global',
-    scopes: string[] = ['read']
+    scopes: string[] = ['read'],
+    maxStepsOverride?: number
   ): Promise<TaskPlanResult> {
-    const fallback = this.buildPlan(goal, autonomy);
+    const fallback = this.buildPlan(goal, autonomy, maxStepsOverride);
     const budgets = fallback.budgets;
 
     try {

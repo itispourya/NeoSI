@@ -13,18 +13,26 @@ import type {
   ApiKeyRecord,
   AuditLogRecord,
   BackgroundJobRecord,
+  BehavioralPolicyConfig,
+  BehavioralPolicyRecord,
+  BehavioralPolicyStatus,
   ConversationRecord,
   DynamicApiRecord,
   EpistemicStatus,
   EvolutionExperimentRecord,
   GraphEntityRecord,
   GraphRelationshipRecord,
+  KnowledgePolicyRecord,
+  KnowledgePolicyRuleType,
   KnowledgeSourceRecord,
   LlmTelemetryRecord,
   MemoryRecord,
   MessageRecord,
   ModelEvaluationRecord,
   ModelRecord,
+  NeosApprovalRecord,
+  NeosApprovalStatus,
+  NeosCapabilityRecord,
   ObjectiveRecord,
   ObjectiveStatus,
   ResearchReportRecord,
@@ -102,6 +110,12 @@ export class SqliteNeoDatabase implements NeoDatabase {
     if (!existingEntity.has('embedding_dim')) {
       this.db.exec(`ALTER TABLE entities ADD COLUMN embedding_dim INTEGER NOT NULL DEFAULT 768;`);
     }
+
+    const ksCols = this.db.prepare(`PRAGMA table_info(knowledge_sources)`).all() as Array<{ name: string }>;
+    const existingKs = new Set(ksCols.map((c) => c.name));
+    if (!existingKs.has('etag')) this.db.exec(`ALTER TABLE knowledge_sources ADD COLUMN etag TEXT;`);
+    if (!existingKs.has('last_modified')) this.db.exec(`ALTER TABLE knowledge_sources ADD COLUMN last_modified TEXT;`);
+    if (!existingKs.has('review_at')) this.db.exec(`ALTER TABLE knowledge_sources ADD COLUMN review_at TEXT;`);
   }
 
   async init(): Promise<void> {
@@ -528,12 +542,79 @@ export class SqliteNeoDatabase implements NeoDatabase {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS knowledge_policies (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL DEFAULT 'global',
+        rule_type TEXT NOT NULL,
+        pattern TEXT NOT NULL,
+        source_kind TEXT NOT NULL DEFAULT 'domain',
+        min_reliability REAL NOT NULL DEFAULT 0.55,
+        revalidation_hours INTEGER NOT NULL DEFAULT 168,
+        etag TEXT,
+        last_modified TEXT,
+        last_fetched_at TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS behavioral_policies (
+        id TEXT PRIMARY KEY,
+        version INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        config TEXT NOT NULL DEFAULT '{}',
+        baseline_metrics TEXT NOT NULL DEFAULT '{}',
+        candidate_metrics TEXT NOT NULL DEFAULT '{}',
+        hypothesis TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        promoted_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS neos_capabilities (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        module_name TEXT NOT NULL,
+        capability_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        endpoint_url TEXT,
+        required_scopes TEXT NOT NULL DEFAULT '["read"]',
+        risk_level TEXT NOT NULL,
+        requires_confirmation INTEGER NOT NULL DEFAULT 0,
+        input_schema TEXT NOT NULL DEFAULT '{}',
+        output_schema TEXT NOT NULL DEFAULT '{}',
+        contract_version TEXT NOT NULL DEFAULT '1.0',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        last_synced_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(tenant_id, capability_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS neos_approvals (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        capability_id TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        action_summary TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        required_scopes TEXT NOT NULL DEFAULT '["write"]',
+        status TEXT NOT NULL,
+        decision_by TEXT,
+        decision_note TEXT,
+        execution_result TEXT,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        decided_at TEXT
+      );
     `);
     this.ensureMemoryColumns();
     const now = new Date().toISOString();
     this.db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`).run('001_init', now);
     this.db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`).run('002_neo_cognitive_core', now);
     this.db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`).run('003_neo_upgrade', now);
+    this.db.prepare(`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`).run('006_intelligence_upgrade', now);
     await seedInitialData(this);
   }
 
@@ -1027,7 +1108,7 @@ export class SqliteNeoDatabase implements NeoDatabase {
     if (existing) {
       this.db
         .prepare(
-          `UPDATE knowledge_sources SET title = ?, source_type = ?, author = ?, published_at = ?, last_verified_at = ?, reliability_score = ?, quality_breakdown = ?, content_hash = ?, injection_flagged = ? WHERE id = ?`
+          `UPDATE knowledge_sources SET title = ?, source_type = ?, author = ?, published_at = ?, last_verified_at = ?, reliability_score = ?, quality_breakdown = ?, content_hash = ?, injection_flagged = ?, etag = ?, last_modified = ?, review_at = ? WHERE id = ?`
         )
         .run(
           input.title,
@@ -1039,6 +1120,9 @@ export class SqliteNeoDatabase implements NeoDatabase {
           JSON.stringify(input.quality_breakdown),
           input.content_hash,
           input.injection_flagged ? 1 : 0,
+          input.etag ?? null,
+          input.last_modified ?? null,
+          input.review_at ?? null,
           existing.id
         );
       return { ...input, id: existing.id, created_at: existing.created_at };
@@ -1046,8 +1130,8 @@ export class SqliteNeoDatabase implements NeoDatabase {
     const rec: KnowledgeSourceRecord = { ...input, id: uuidv4(), created_at: new Date().toISOString() };
     this.db
       .prepare(
-        `INSERT INTO knowledge_sources (id, tenant_id, url, title, source_type, author, published_at, last_verified_at, reliability_score, quality_breakdown, content_hash, injection_flagged, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO knowledge_sources (id, tenant_id, url, title, source_type, author, published_at, last_verified_at, reliability_score, quality_breakdown, content_hash, injection_flagged, etag, last_modified, review_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         rec.id,
@@ -1062,6 +1146,9 @@ export class SqliteNeoDatabase implements NeoDatabase {
         JSON.stringify(rec.quality_breakdown),
         rec.content_hash,
         rec.injection_flagged ? 1 : 0,
+        rec.etag ?? null,
+        rec.last_modified ?? null,
+        rec.review_at ?? null,
         rec.created_at
       );
     return rec;
@@ -2209,5 +2296,332 @@ export class SqliteNeoDatabase implements NeoDatabase {
       .prepare('INSERT INTO admin_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
       .run(key, value, new Date().toISOString());
     return Number(result.changes) === 1;
+  }
+
+  // --- Knowledge Policies ---
+  private mapKnowledgePolicyRow(r: Record<string, unknown>): KnowledgePolicyRecord {
+    return {
+      ...(r as unknown as KnowledgePolicyRecord),
+      enabled: Boolean(r.enabled),
+      min_reliability: Number(r.min_reliability ?? 0.55),
+      revalidation_hours: Number(r.revalidation_hours ?? 168),
+      metadata: parseJson(r.metadata, {}),
+    };
+  }
+
+  async listKnowledgePolicies(tenantId?: string, ruleType?: KnowledgePolicyRuleType): Promise<KnowledgePolicyRecord[]> {
+    const clauses: string[] = [];
+    const params: string[] = [];
+    if (tenantId) {
+      clauses.push('(tenant_id = ? OR tenant_id = ?)');
+      params.push(tenantId, 'global');
+    }
+    if (ruleType) {
+      clauses.push('rule_type = ?');
+      params.push(ruleType);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = this.db.prepare(`SELECT * FROM knowledge_policies ${where} ORDER BY created_at DESC`).all(...params) as Record<string, unknown>[];
+    return rows.map((r) => this.mapKnowledgePolicyRow(r));
+  }
+
+  async upsertKnowledgePolicy(input: Omit<KnowledgePolicyRecord, 'id' | 'created_at'>): Promise<KnowledgePolicyRecord> {
+    const existing = this.db
+      .prepare('SELECT id, created_at FROM knowledge_policies WHERE tenant_id = ? AND rule_type = ? AND lower(pattern) = lower(?)')
+      .get(input.tenant_id, input.rule_type, input.pattern) as { id: string; created_at: string } | undefined;
+    if (existing) {
+      this.db
+        .prepare(
+          `UPDATE knowledge_policies SET source_kind = ?, min_reliability = ?, revalidation_hours = ?, etag = ?, last_modified = ?, last_fetched_at = ?, enabled = ?, metadata = ? WHERE id = ?`
+        )
+        .run(
+          input.source_kind,
+          input.min_reliability,
+          input.revalidation_hours,
+          input.etag,
+          input.last_modified,
+          input.last_fetched_at,
+          input.enabled ? 1 : 0,
+          JSON.stringify(input.metadata || {}),
+          existing.id
+        );
+      return { ...input, id: existing.id, created_at: existing.created_at };
+    }
+    const rec: KnowledgePolicyRecord = { ...input, id: uuidv4(), created_at: new Date().toISOString() };
+    this.db
+      .prepare(
+        `INSERT INTO knowledge_policies (id, tenant_id, rule_type, pattern, source_kind, min_reliability, revalidation_hours, etag, last_modified, last_fetched_at, enabled, metadata, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        rec.id,
+        rec.tenant_id,
+        rec.rule_type,
+        rec.pattern,
+        rec.source_kind,
+        rec.min_reliability,
+        rec.revalidation_hours,
+        rec.etag,
+        rec.last_modified,
+        rec.last_fetched_at,
+        rec.enabled ? 1 : 0,
+        JSON.stringify(rec.metadata || {}),
+        rec.created_at
+      );
+    return rec;
+  }
+
+  async updateKnowledgePolicy(
+    id: string,
+    patch: Partial<Pick<KnowledgePolicyRecord, 'enabled' | 'min_reliability' | 'revalidation_hours' | 'etag' | 'last_modified' | 'last_fetched_at' | 'metadata'>>
+  ): Promise<KnowledgePolicyRecord | null> {
+    const row = this.db.prepare('SELECT * FROM knowledge_policies WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const existing = this.mapKnowledgePolicyRow(row);
+    const merged: KnowledgePolicyRecord = { ...existing, ...patch };
+    this.db
+      .prepare(
+        `UPDATE knowledge_policies SET enabled = ?, min_reliability = ?, revalidation_hours = ?, etag = ?, last_modified = ?, last_fetched_at = ?, metadata = ? WHERE id = ?`
+      )
+      .run(
+        merged.enabled ? 1 : 0,
+        merged.min_reliability,
+        merged.revalidation_hours,
+        merged.etag,
+        merged.last_modified,
+        merged.last_fetched_at,
+        JSON.stringify(merged.metadata || {}),
+        id
+      );
+    return merged;
+  }
+
+  async deleteKnowledgePolicy(id: string): Promise<boolean> {
+    const res = this.db.prepare('DELETE FROM knowledge_policies WHERE id = ?').run(id);
+    return res.changes > 0;
+  }
+
+  // --- Behavioral Policies ---
+  private mapBehavioralPolicyRow(r: Record<string, unknown>): BehavioralPolicyRecord {
+    return {
+      ...(r as unknown as BehavioralPolicyRecord),
+      version: Number(r.version),
+      config: parseJson<BehavioralPolicyConfig>(r.config, {
+        ragTopK: 4,
+        minReliability: 0.45,
+        hybridVectorWeight: 0.58,
+        hybridLexicalWeight: 0.22,
+        preferLocalForPrivate: true,
+        preferFastForSimple: true,
+        maxPlanSteps: 10,
+        plannerRetryBudget: 2,
+        systemDirectiveSuffix: '',
+        extraLanguages: {},
+      }),
+      baseline_metrics: parseJson(r.baseline_metrics, {}),
+      candidate_metrics: parseJson(r.candidate_metrics, {}),
+    };
+  }
+
+  async listBehavioralPolicies(limit = 20): Promise<BehavioralPolicyRecord[]> {
+    const rows = this.db.prepare('SELECT * FROM behavioral_policies ORDER BY version DESC LIMIT ?').all(limit) as Record<string, unknown>[];
+    return rows.map((r) => this.mapBehavioralPolicyRow(r));
+  }
+
+  async getActiveBehavioralPolicy(): Promise<BehavioralPolicyRecord | null> {
+    const row = this.db.prepare(`SELECT * FROM behavioral_policies WHERE status = 'active' ORDER BY version DESC LIMIT 1`).get() as Record<string, unknown> | undefined;
+    return row ? this.mapBehavioralPolicyRow(row) : null;
+  }
+
+  async createBehavioralPolicy(input: Omit<BehavioralPolicyRecord, 'id' | 'created_at'>): Promise<BehavioralPolicyRecord> {
+    const rec: BehavioralPolicyRecord = { ...input, id: uuidv4(), created_at: new Date().toISOString() };
+    if (rec.status === 'active') {
+      this.db.prepare(`UPDATE behavioral_policies SET status = 'rolled_back' WHERE status = 'active'`).run();
+    }
+    this.db
+      .prepare(
+        `INSERT INTO behavioral_policies (id, version, title, status, config, baseline_metrics, candidate_metrics, hypothesis, created_at, promoted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        rec.id,
+        rec.version,
+        rec.title,
+        rec.status,
+        JSON.stringify(rec.config),
+        JSON.stringify(rec.baseline_metrics),
+        JSON.stringify(rec.candidate_metrics),
+        rec.hypothesis,
+        rec.created_at,
+        rec.promoted_at
+      );
+    return rec;
+  }
+
+  async updateBehavioralPolicyStatus(
+    id: string,
+    status: BehavioralPolicyStatus,
+    candidateMetrics?: Record<string, unknown>
+  ): Promise<BehavioralPolicyRecord | null> {
+    const row = this.db.prepare('SELECT * FROM behavioral_policies WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    if (status === 'active') {
+      this.db.prepare(`UPDATE behavioral_policies SET status = 'rolled_back' WHERE status = 'active' AND id != ?`).run(id);
+    }
+    const promotedAt = status === 'active' ? new Date().toISOString() : (row.promoted_at as string | null);
+    const nextMetrics = candidateMetrics ? JSON.stringify(candidateMetrics) : (row.candidate_metrics as string);
+    this.db
+      .prepare('UPDATE behavioral_policies SET status = ?, candidate_metrics = ?, promoted_at = ? WHERE id = ?')
+      .run(status, nextMetrics, promotedAt, id);
+    const updated = this.db.prepare('SELECT * FROM behavioral_policies WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return updated ? this.mapBehavioralPolicyRow(updated) : null;
+  }
+
+  // --- Neos Capabilities & Approvals ---
+  private mapNeosCapabilityRow(r: Record<string, unknown>): NeosCapabilityRecord {
+    return {
+      ...(r as unknown as NeosCapabilityRecord),
+      required_scopes: parseJson(r.required_scopes, ['read']),
+      requires_confirmation: Boolean(r.requires_confirmation),
+      input_schema: parseJson(r.input_schema, {}),
+      output_schema: parseJson(r.output_schema, {}),
+      enabled: Boolean(r.enabled),
+    };
+  }
+
+  async listNeosCapabilities(tenantId: string, enabledOnly = false): Promise<NeosCapabilityRecord[]> {
+    const rows = enabledOnly
+      ? (this.db.prepare('SELECT * FROM neos_capabilities WHERE tenant_id = ? AND enabled = 1 ORDER BY module_name ASC, capability_id ASC').all(tenantId) as Record<string, unknown>[])
+      : (this.db.prepare('SELECT * FROM neos_capabilities WHERE tenant_id = ? ORDER BY module_name ASC, capability_id ASC').all(tenantId) as Record<string, unknown>[]);
+    return rows.map((r) => this.mapNeosCapabilityRow(r));
+  }
+
+  async upsertNeosCapability(input: Omit<NeosCapabilityRecord, 'id' | 'created_at' | 'last_synced_at'>): Promise<NeosCapabilityRecord> {
+    const now = new Date().toISOString();
+    const existing = this.db
+      .prepare('SELECT id, created_at FROM neos_capabilities WHERE tenant_id = ? AND capability_id = ?')
+      .get(input.tenant_id, input.capability_id) as { id: string; created_at: string } | undefined;
+    if (existing) {
+      this.db
+        .prepare(
+          `UPDATE neos_capabilities SET module_name = ?, title = ?, description = ?, endpoint_url = ?, required_scopes = ?, risk_level = ?, requires_confirmation = ?, input_schema = ?, output_schema = ?, contract_version = ?, enabled = ?, last_synced_at = ? WHERE id = ?`
+        )
+        .run(
+          input.module_name,
+          input.title,
+          input.description,
+          input.endpoint_url,
+          JSON.stringify(input.required_scopes),
+          input.risk_level,
+          input.requires_confirmation ? 1 : 0,
+          JSON.stringify(input.input_schema),
+          JSON.stringify(input.output_schema),
+          input.contract_version,
+          input.enabled ? 1 : 0,
+          now,
+          existing.id
+        );
+      return { ...input, id: existing.id, created_at: existing.created_at, last_synced_at: now };
+    }
+    const rec: NeosCapabilityRecord = { ...input, id: uuidv4(), created_at: now, last_synced_at: now };
+    this.db
+      .prepare(
+        `INSERT INTO neos_capabilities (id, tenant_id, module_name, capability_id, title, description, endpoint_url, required_scopes, risk_level, requires_confirmation, input_schema, output_schema, contract_version, enabled, last_synced_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        rec.id,
+        rec.tenant_id,
+        rec.module_name,
+        rec.capability_id,
+        rec.title,
+        rec.description,
+        rec.endpoint_url,
+        JSON.stringify(rec.required_scopes),
+        rec.risk_level,
+        rec.requires_confirmation ? 1 : 0,
+        JSON.stringify(rec.input_schema),
+        JSON.stringify(rec.output_schema),
+        rec.contract_version,
+        rec.enabled ? 1 : 0,
+        rec.last_synced_at,
+        rec.created_at
+      );
+    return rec;
+  }
+
+  async deleteNeosCapability(id: string, tenantId: string): Promise<boolean> {
+    const res = this.db.prepare('DELETE FROM neos_capabilities WHERE id = ? AND tenant_id = ?').run(id, tenantId);
+    return res.changes > 0;
+  }
+
+  private mapNeosApprovalRow(r: Record<string, unknown>): NeosApprovalRecord {
+    return {
+      ...(r as unknown as NeosApprovalRecord),
+      payload: parseJson(r.payload, {}),
+      required_scopes: parseJson(r.required_scopes, ['write']),
+      execution_result: r.execution_result ? parseJson(r.execution_result, null) : null,
+    };
+  }
+
+  async listNeosApprovals(tenantId: string, status?: NeosApprovalStatus, limit = 50): Promise<NeosApprovalRecord[]> {
+    const rows = status
+      ? (this.db.prepare('SELECT * FROM neos_approvals WHERE tenant_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?').all(tenantId, status, limit) as Record<string, unknown>[])
+      : (this.db.prepare('SELECT * FROM neos_approvals WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?').all(tenantId, limit) as Record<string, unknown>[]);
+    return rows.map((r) => this.mapNeosApprovalRow(r));
+  }
+
+  async getNeosApprovalById(id: string, tenantId: string): Promise<NeosApprovalRecord | null> {
+    const row = this.db.prepare('SELECT * FROM neos_approvals WHERE id = ? AND tenant_id = ?').get(id, tenantId) as Record<string, unknown> | undefined;
+    return row ? this.mapNeosApprovalRow(row) : null;
+  }
+
+  async createNeosApproval(input: Omit<NeosApprovalRecord, 'id' | 'created_at' | 'decided_at'>): Promise<NeosApprovalRecord> {
+    const rec: NeosApprovalRecord = { ...input, id: uuidv4(), created_at: new Date().toISOString(), decided_at: null };
+    this.db
+      .prepare(
+        `INSERT INTO neos_approvals (id, tenant_id, capability_id, actor, action_summary, payload, required_scopes, status, decision_by, decision_note, execution_result, expires_at, created_at, decided_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+      )
+      .run(
+        rec.id,
+        rec.tenant_id,
+        rec.capability_id,
+        rec.actor,
+        rec.action_summary,
+        JSON.stringify(rec.payload),
+        JSON.stringify(rec.required_scopes),
+        rec.status,
+        rec.decision_by,
+        rec.decision_note,
+        rec.execution_result ? JSON.stringify(rec.execution_result) : null,
+        rec.expires_at,
+        rec.created_at
+      );
+    return rec;
+  }
+
+  async updateNeosApproval(
+    id: string,
+    tenantId: string,
+    patch: Partial<Pick<NeosApprovalRecord, 'status' | 'decision_by' | 'decision_note' | 'execution_result' | 'decided_at'>>
+  ): Promise<NeosApprovalRecord | null> {
+    const existing = await this.getNeosApprovalById(id, tenantId);
+    if (!existing) return null;
+    const merged: NeosApprovalRecord = { ...existing, ...patch };
+    this.db
+      .prepare(
+        `UPDATE neos_approvals SET status = ?, decision_by = ?, decision_note = ?, execution_result = ?, decided_at = ? WHERE id = ? AND tenant_id = ?`
+      )
+      .run(
+        merged.status,
+        merged.decision_by,
+        merged.decision_note,
+        merged.execution_result ? JSON.stringify(merged.execution_result) : null,
+        merged.decided_at,
+        id,
+        tenantId
+      );
+    return merged;
   }
 }

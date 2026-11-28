@@ -403,4 +403,64 @@ export async function seedInitialData(db: NeoDatabase): Promise<void> {
       last_evaluated_at: null,
     });
   }
+
+  // Seed default trusted domain policies if none exist
+  const existingPolicies = await db.listKnowledgePolicies();
+  if (existingPolicies.length === 0) {
+    const trustedDomains = ['nodejs.org', 'typescriptlang.org', 'github.com', 'en.wikipedia.org', 'postgresql.org'];
+    for (const domain of trustedDomains) {
+      await db.upsertKnowledgePolicy({
+        tenant_id: 'global',
+        rule_type: 'trusted_domain',
+        pattern: domain,
+        source_kind: 'domain',
+        min_reliability: 0.65,
+        revalidation_hours: 168,
+        etag: null,
+        last_modified: null,
+        last_fetched_at: null,
+        enabled: true,
+        metadata: { seeded: true },
+      });
+    }
+    await db.upsertKnowledgePolicy({
+      tenant_id: 'global',
+      rule_type: 'feed_source',
+      pattern: 'nodejs/node',
+      source_kind: 'github_releases',
+      min_reliability: 0.85,
+      revalidation_hours: 24,
+      etag: null,
+      last_modified: null,
+      last_fetched_at: null,
+      enabled: true,
+      metadata: { seeded: true, topic: 'Node.js Releases' },
+    });
+  }
+
+  // Seed baseline active Layer 3 Behavioral Policy
+  const existingBehavioral = await db.listBehavioralPolicies(1);
+  if (existingBehavioral.length === 0) {
+    await db.createBehavioralPolicy({
+      version: 1,
+      title: 'Neo Baseline Cognitive Policy v1',
+      status: 'active',
+      hypothesis: 'Balanced hybrid retrieval, privacy-aware routing, and 10-step DAG planning baseline.',
+      config: {
+        ragTopK: 4,
+        minReliability: 0.45,
+        hybridVectorWeight: 0.58,
+        hybridLexicalWeight: 0.22,
+        preferLocalForPrivate: true,
+        preferFastForSimple: true,
+        maxPlanSteps: 10,
+        plannerRetryBudget: 2,
+        systemDirectiveSuffix: '',
+        extraLanguages: {},
+      },
+      baseline_metrics: {},
+      candidate_metrics: {},
+      promoted_at: new Date().toISOString(),
+    });
+  }
 }

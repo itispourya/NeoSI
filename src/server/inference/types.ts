@@ -34,6 +34,38 @@ export interface ToolCallResult {
   arguments: Record<string, unknown>;
 }
 
+export type ToolChoiceOption =
+  | 'auto'
+  | 'none'
+  | 'required'
+  | { type: 'function'; function: { name: string } };
+
+export type ResponseFormatSpec =
+  | 'json'
+  | 'text'
+  | { type: 'json_object' }
+  | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
+
+export type CircuitBreakerState = 'closed' | 'open' | 'half_open';
+
+export interface CircuitBreakerStatus {
+  runtime: RuntimeKind;
+  state: CircuitBreakerState;
+  failures: number;
+  successes: number;
+  lastFailureAt: string | null;
+  nextRetryAt: string | null;
+  lastError: string | null;
+}
+
+export interface RoutingPolicyHint {
+  complexity?: 'simple' | 'standard' | 'complex';
+  privacyMode?: 'local_only' | 'hybrid';
+  preferSpeed?: boolean;
+  maxCostUsd?: number;
+  requireToolCalling?: boolean;
+}
+
 export interface ModelCapabilities {
   toolCalling: boolean;
   reasoning: number;
@@ -56,6 +88,8 @@ export interface ModelPerformanceMetrics {
   avgLatencyMs: number;
   tokensPerSec: number;
   calls: number;
+  costPer1kInputUsd?: number;
+  costPer1kOutputUsd?: number;
   lastError?: string | null;
 }
 
@@ -79,10 +113,14 @@ export interface InferenceRequest {
   preferredModelId?: string;
   strictTarget?: boolean;
   tools?: ToolDefinition[];
+  toolChoice?: ToolChoiceOption;
   language?: SupportedLanguage;
-  responseFormat?: 'json' | 'text';
+  responseFormat?: ResponseFormatSpec;
   maxTokens?: number;
   temperature?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  routingHint?: RoutingPolicyHint;
   context?: Record<string, unknown>;
 }
 
@@ -94,12 +132,14 @@ export interface InferenceResponse {
   completionTokens: number;
   latencyMs: number;
   tokensPerSec: number;
+  estimatedCostUsd?: number;
+  finishReason?: 'stop' | 'tool_calls' | 'length';
   toolCalls?: ToolCallResult[];
   isFallback?: boolean;
 }
 
 export type InferenceStreamChunk =
-  | { type: 'delta'; text: string }
+  | { type: 'delta'; text: string; toolCallDelta?: { index: number; id?: string; name?: string; argumentsDelta?: string } }
   | { type: 'done'; response: InferenceResponse };
 
 export type InferenceStream = AsyncGenerator<InferenceStreamChunk>;
@@ -109,6 +149,7 @@ export interface ModelRuntime {
   readonly displayName: string;
   isConfigured(): boolean;
   healthCheck(): Promise<ModelHealth>;
+  discoverModels?(): Promise<string[]>;
   probeModelLoaded?(modelId: string): Promise<{ ready: boolean; message: string }>;
   generate(req: InferenceRequest, modelId: string): Promise<InferenceResponse>;
   stream(req: InferenceRequest, modelId: string): InferenceStream;

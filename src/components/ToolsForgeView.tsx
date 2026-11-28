@@ -17,6 +17,13 @@ export function ToolsForgeView({ data, onRefresh }: ToolsForgeViewProps) {
   const [openApiSpec, setOpenApiSpec] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [neosMod, setNeosMod] = useState('finance');
+  const [neosCapId, setNeosCapId] = useState('finance.invoice.post');
+  const [neosTitle, setNeosTitle] = useState('Post Supplier Invoice');
+  const [neosRisk, setNeosRisk] = useState<'low' | 'medium' | 'high'>('high');
+  const [neosPayloadJson, setNeosPayloadJson] = useState('{"invoiceId":"INV-1042","amount":1250}');
+  const [neosStatusMsg, setNeosStatusMsg] = useState<string | null>(null);
+
   const executeTool = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -84,6 +91,75 @@ export function ToolsForgeView({ data, onRefresh }: ToolsForgeViewProps) {
       setBusy(false);
     }
   };
+
+  const syncNeosCapability = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setNeosStatusMsg(null);
+    try {
+      await apiFetch('/api/v1/neos/capabilities/sync', {
+        method: 'POST',
+        body: JSON.stringify({
+          capabilities: [
+            {
+              module_name: neosMod.trim(),
+              capability_id: neosCapId.trim(),
+              title: neosTitle.trim(),
+              description: `Registered via Control Plane for ${neosMod.trim()}`,
+              risk_level: neosRisk,
+              requires_confirmation: neosRisk === 'high',
+              required_scopes: ['write'],
+            },
+          ],
+        }),
+      });
+      setNeosStatusMsg(`Synced Neos capability '${neosCapId.trim()}'.`);
+      await onRefresh();
+    } catch (err) {
+      setNeosStatusMsg(err instanceof Error ? err.message : 'Capability sync failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const proposeNeosAction = async (capabilityId: string) => {
+    setBusy(true);
+    setNeosStatusMsg(null);
+    try {
+      const payload = JSON.parse(neosPayloadJson);
+      const res = await apiFetch<{ status: string; approval?: { id: string } }>('/api/v1/neos/actions/execute', {
+        method: 'POST',
+        body: JSON.stringify({ capabilityId, payload }),
+      });
+      setNeosStatusMsg(
+        res.status === 'confirmation_required'
+          ? `Action queued for human confirmation (approval ${res.approval?.id.slice(0, 8)}).`
+          : `Executed capability '${capabilityId}' cleanly.`
+      );
+      await onRefresh();
+    } catch (err) {
+      setNeosStatusMsg(err instanceof Error ? err.message : 'Neos action failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const decideNeosApproval = async (id: string, decision: 'confirm' | 'reject') => {
+    setBusy(true);
+    setNeosStatusMsg(null);
+    try {
+      await apiFetch(`/api/v1/neos/approvals/${id}/${decision}`, { method: 'POST', body: '{}' });
+      setNeosStatusMsg(`Approval ${id.slice(0, 8)} ${decision === 'confirm' ? 'confirmed' : 'rejected'}.`);
+      await onRefresh();
+    } catch (err) {
+      setNeosStatusMsg(err instanceof Error ? err.message : `Failed to ${decision} approval`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const neosCapabilities = data.neosCapabilities ?? [];
+  const neosApprovals = data.neosApprovals ?? [];
 
   return (
     <div className="space-y-6">
@@ -197,6 +273,137 @@ export function ToolsForgeView({ data, onRefresh }: ToolsForgeViewProps) {
             ))}
           </div>
         )}
+      </div>
+
+      {/* Deep Neos Integration & Human Confirmation Queue */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">
+          <h3 className="font-display text-sm font-semibold text-slate-100">
+            Deep Neos Capability Contract ({neosCapabilities.length})
+          </h3>
+          {neosStatusMsg && (
+            <div className="p-2.5 rounded bg-blue-500/10 border border-blue-500/30 text-xs text-blue-200">{neosStatusMsg}</div>
+          )}
+          <form onSubmit={syncNeosCapability} className="grid grid-cols-2 gap-2 text-xs">
+            <input
+              type="text"
+              value={neosMod}
+              onChange={(e) => setNeosMod(e.target.value)}
+              placeholder="Module (finance)"
+              aria-label="Neos module name"
+              required
+              className="px-2.5 py-1.5 bg-[#0B0F17] border border-slate-700 rounded text-slate-100"
+            />
+            <select
+              aria-label="Capability risk level"
+              value={neosRisk}
+              onChange={(e) => setNeosRisk(e.target.value as 'low' | 'medium' | 'high')}
+              className="px-2.5 py-1.5 bg-[#0B0F17] border border-slate-700 rounded text-slate-200"
+            >
+              <option value="low">low risk</option>
+              <option value="medium">medium risk</option>
+              <option value="high">high risk (gated)</option>
+            </select>
+            <input
+              type="text"
+              value={neosCapId}
+              onChange={(e) => setNeosCapId(e.target.value)}
+              placeholder="Capability ID (finance.invoice.post)"
+              aria-label="Capability ID"
+              required
+              className="px-2.5 py-1.5 bg-[#0B0F17] border border-slate-700 rounded font-mono text-slate-100"
+            />
+            <input
+              type="text"
+              value={neosTitle}
+              onChange={(e) => setNeosTitle(e.target.value)}
+              placeholder="Title"
+              aria-label="Capability title"
+              required
+              className="px-2.5 py-1.5 bg-[#0B0F17] border border-slate-700 rounded text-slate-100"
+            />
+            <input
+              type="text"
+              value={neosPayloadJson}
+              onChange={(e) => setNeosPayloadJson(e.target.value)}
+              placeholder='Test payload JSON e.g. {"amount":500}'
+              aria-label="Action test payload JSON"
+              className="col-span-2 px-2.5 py-1.5 bg-[#0B0F17] border border-slate-700 rounded font-mono text-slate-100"
+            />
+            <button
+              type="submit"
+              disabled={busy}
+              className="col-span-2 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium whitespace-nowrap"
+            >
+              Sync Neos Capability
+            </button>
+          </form>
+          <div className="divide-y divide-slate-800/80 max-h-44 overflow-y-auto">
+            {neosCapabilities.map((c) => (
+              <div key={c.id} className="py-2 flex items-center justify-between gap-3 text-xs">
+                <div className="min-w-0">
+                  <div className="font-mono text-slate-200 truncate">{c.capability_id}</div>
+                  <div className="font-mono text-[11px] text-slate-400">
+                    {c.module_name} · {c.risk_level} · {c.requires_confirmation ? 'confirmation gated' : 'auto'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void proposeNeosAction(c.capability_id)}
+                  disabled={busy}
+                  className="px-2.5 py-1 rounded border border-slate-700 hover:bg-slate-800 text-[11px] text-slate-200 whitespace-nowrap shrink-0"
+                >
+                  Propose Action
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">
+          <h3 className="font-display text-sm font-semibold text-slate-100">
+            Human Confirmation Approval Queue ({neosApprovals.length})
+          </h3>
+          {neosApprovals.length === 0 ? (
+            <div className="text-xs text-slate-400">No high-risk Neos actions waiting in the confirmation queue.</div>
+          ) : (
+            <div className="divide-y divide-slate-800/80 max-h-72 overflow-y-auto">
+              {neosApprovals.map((app) => (
+                <div key={app.id} className="py-2.5 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-slate-100 truncate">{app.action_summary}</span>
+                    <span className={`font-mono text-[11px] shrink-0 ${app.status === 'pending' ? 'text-amber-400' : app.status === 'rejected' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                      {app.status}
+                    </span>
+                  </div>
+                  <div className="font-mono text-[11px] text-slate-400 truncate">
+                    {app.capability_id} · actor {app.actor}
+                  </div>
+                  {app.status === 'pending' && (
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => void decideNeosApproval(app.id, 'confirm')}
+                        disabled={busy}
+                        className="px-2.5 py-1 rounded border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10 text-[11px] whitespace-nowrap"
+                      >
+                        Confirm Action
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void decideNeosApproval(app.id, 'reject')}
+                        disabled={busy}
+                        className="px-2.5 py-1 rounded border border-rose-500/40 text-rose-300 hover:bg-rose-500/10 text-[11px] whitespace-nowrap"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

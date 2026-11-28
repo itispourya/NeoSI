@@ -262,11 +262,21 @@ async function searchWikipedia(query: string): Promise<DiscoveredSource[]> {
 export async function discoverWebKnowledge(topic: string): Promise<DiscoveredSource[]> {
   const results: DiscoveredSource[] = [];
   const seenUrls = new Set<string>();
+  const { getDb } = await import('../db/adapter.ts');
+  const { evaluateDomainPolicy } = await import('../knowledge/feeds.ts');
+  const db = await getDb();
+  const policies = await db.listKnowledgePolicies().then((list) => list.filter((p) => p.enabled)).catch(() => []);
 
   const pushUnique = async (item: DiscoveredSource) => {
     if (!item.url || seenUrls.has(item.url)) return;
+    const policyCheck = evaluateDomainPolicy(item.url, policies);
+    if (!policyCheck.allowed) return;
+    if (item.reliabilityScore < policyCheck.minReliability && !policyCheck.trusted) return;
     const check = await validateExternalUrlAsync(item.url);
     if (!check.valid) return;
+    if (policyCheck.trusted) {
+      item.reliabilityScore = Math.min(0.98, Number((item.reliabilityScore + 0.06).toFixed(2)));
+    }
     seenUrls.add(item.url);
     results.push(item);
   };

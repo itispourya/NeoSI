@@ -354,6 +354,91 @@ export interface AuditLogInfo {
   created_at: string;
 }
 
+export interface CircuitBreakerInfo {
+  runtime: string;
+  state: 'closed' | 'open' | 'half_open';
+  failures: number;
+  successes: number;
+  lastFailureAt: string | null;
+  nextRetryAt: string | null;
+  lastError: string | null;
+}
+
+export interface KnowledgePolicyInfo {
+  id: string;
+  tenant_id: string;
+  rule_type: 'trusted_domain' | 'blocked_domain' | 'feed_source';
+  pattern: string;
+  source_kind: string;
+  min_reliability: number;
+  revalidation_hours: number;
+  etag: string | null;
+  last_modified: string | null;
+  last_fetched_at: string | null;
+  enabled: boolean;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface BehavioralPolicyInfo {
+  id: string;
+  version: number;
+  title: string;
+  status: 'active' | 'candidate' | 'rolled_back' | 'rejected';
+  config: {
+    ragTopK: number;
+    minReliability: number;
+    hybridVectorWeight: number;
+    hybridLexicalWeight: number;
+    preferLocalForPrivate: boolean;
+    preferFastForSimple: boolean;
+    maxPlanSteps: number;
+    plannerRetryBudget: number;
+    systemDirectiveSuffix: string;
+  };
+  baseline_metrics: Record<string, unknown>;
+  candidate_metrics: Record<string, unknown>;
+  hypothesis: string;
+  created_at: string;
+  promoted_at: string | null;
+}
+
+export interface NeosCapabilityInfo {
+  id: string;
+  tenant_id: string;
+  module_name: string;
+  capability_id: string;
+  title: string;
+  description: string;
+  endpoint_url: string | null;
+  required_scopes: string[];
+  risk_level: 'low' | 'medium' | 'high';
+  requires_confirmation: boolean;
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
+  contract_version: string;
+  enabled: boolean;
+  last_synced_at: string;
+  created_at: string;
+}
+
+export interface NeosApprovalInfo {
+  id: string;
+  tenant_id: string;
+  capability_id: string;
+  actor: string;
+  action_summary: string;
+  payload: Record<string, unknown>;
+  required_scopes: string[];
+  status: 'pending' | 'approved' | 'rejected' | 'executed' | 'expired';
+  decision_by: string | null;
+  decision_note: string | null;
+  execution_result: Record<string, unknown> | null;
+  expires_at: string;
+  created_at: string;
+  decided_at: string | null;
+}
+
 export interface AdminOverviewPayload {
   subsystems: {
     runtimes: Array<{ id: string; name: string; configured: boolean; endpoint: string }>;
@@ -366,6 +451,7 @@ export interface AdminOverviewPayload {
   capabilities: CapabilityInfo[];
   hardware: HardwareProfileInfo;
   runtimeHealth: RuntimeHealthInfo[];
+  circuitBreakers?: CircuitBreakerInfo[];
   lockState: { locked: boolean; source: 'env' | 'claimed' | 'unclaimed' };
   tenants: TenantInfo[];
   apiKeys: ApiKeyInfo[];
@@ -376,6 +462,7 @@ export interface AdminOverviewPayload {
   upgrades: SelfUpgradeInfo[];
   experiments: EvolutionExperimentInfo[];
   trainingJobs: TrainingJobInfo[];
+  behavioralPolicies?: BehavioralPolicyInfo[];
   promotedModules: Array<{ id: string; name: string; filePath: string; promotedAt: string }>;
   dynamicApis: DynamicApiInfo[];
   jobs: Array<{ id: string; job_type: string; status: string; attempts: number; created_at: string; error: string | null }>;
@@ -400,6 +487,9 @@ export interface AdminOverviewPayload {
   evaluations: ModelEvaluationInfo[];
   researchReports: ResearchReportInfo[];
   knowledgeSources: KnowledgeSourceInfo[];
+  knowledgePolicies?: KnowledgePolicyInfo[];
+  neosCapabilities?: NeosCapabilityInfo[];
+  neosApprovals?: NeosApprovalInfo[];
   graph: { entities: GraphEntityInfo[]; relationships: GraphRelationshipInfo[] };
   telemetrySummary: {
     totalCalls: number;

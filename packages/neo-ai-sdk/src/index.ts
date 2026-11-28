@@ -101,9 +101,21 @@ export class NeoClient {
 
   chatCompletions(input: {
     model?: string;
-    messages: Array<{ role: 'system' | 'developer' | 'user' | 'assistant' | 'tool'; content: string | Array<{ type: string; text?: string }> }>;
+    messages: Array<{
+      role: 'system' | 'developer' | 'user' | 'assistant' | 'tool';
+      content?: string | Array<{ type: string; text?: string }> | null;
+      name?: string;
+      tool_call_id?: string;
+      tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }>;
+    }>;
     temperature?: number;
     max_tokens?: number;
+    tools?: Array<{ type: 'function'; function: { name: string; description?: string; parameters?: Record<string, unknown> } }>;
+    tool_choice?: 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } };
+    response_format?:
+      | { type: 'text' }
+      | { type: 'json_object' }
+      | { type: 'json_schema'; json_schema: { name: string; schema: Record<string, unknown>; strict?: boolean } };
     language?: SupportedLanguage;
     workspaceContext?: Record<string, unknown>;
   }) {
@@ -112,7 +124,15 @@ export class NeoClient {
       object: 'chat.completion';
       created: number;
       model: string;
-      choices: Array<{ index: number; message: { role: 'assistant'; content: string }; finish_reason: string }>;
+      choices: Array<{
+        index: number;
+        message: {
+          role: 'assistant';
+          content: string | null;
+          tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+        };
+        finish_reason: string;
+      }>;
       usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
     }>('/v1/chat/completions', {
       method: 'POST',

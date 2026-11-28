@@ -9,6 +9,16 @@ interface EvolutionViewProps {
 
 export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
   const [focusArea, setFocusArea] = useState('Prompt caching and latency diagnostics');
+  const [policyTitle, setPolicyTitle] = useState('Tighter Reliability Threshold');
+  const [policyHypothesis, setPolicyHypothesis] = useState('Raise minReliability to 0.5 and ragTopK to 5 for cleaner grounding.');
+  const [policyTopK, setPolicyTopK] = useState(5);
+  const [policyMinRel, setPolicyMinRel] = useState(0.5);
+  const [sysEvalOut, setSysEvalOut] = useState<{
+    overallScore: number;
+    previousOverallScore: number | null;
+    scoreDelta: number | null;
+    categoryScores: Record<string, number>;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -96,9 +106,230 @@ export function EvolutionView({ data, onRefresh }: EvolutionViewProps) {
     }
   };
 
+  const runSystemEval = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await apiFetch<{
+        evaluation: { overall_score: number; category_scores: Record<string, number>; passed_cases: number; total_cases: number };
+        previousOverallScore: number | null;
+        scoreDelta: number | null;
+      }>('/api/v1/evolution/evaluate', { method: 'POST', body: '{}' });
+      setSysEvalOut({
+        overallScore: res.evaluation.overall_score,
+        previousOverallScore: res.previousOverallScore,
+        scoreDelta: res.scoreDelta,
+        categoryScores: res.evaluation.category_scores,
+      });
+      setMsg(
+        `System evaluation completed: ${res.evaluation.overall_score}% (${res.evaluation.passed_cases}/${res.evaluation.total_cases} passed)${
+          res.scoreDelta !== null ? ` · delta ${res.scoreDelta >= 0 ? '+' : ''}${res.scoreDelta}%` : ''
+        }.`
+      );
+      await onRefresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'System evaluation failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const proposePolicy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await apiFetch<{ policy: { version: number; status: string }; experiment: { status: string } }>(
+        '/api/v1/evolution/policies',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            title: policyTitle.trim(),
+            hypothesis: policyHypothesis.trim(),
+            patch: { ragTopK: policyTopK, minReliability: policyMinRel },
+            autoPromote: false,
+          }),
+        }
+      );
+      setMsg(`Behavioral policy v${res.policy.version} evaluated (policy=${res.policy.status}, experiment=${res.experiment.status}).`);
+      await onRefresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Policy proposal failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const promotePolicy = async (id: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await apiFetch<{ policy: { version: number } }>(`/api/v1/evolution/policies/${id}/promote`, {
+        method: 'POST',
+        body: '{}',
+      });
+      setMsg(`Promoted behavioral policy v${res.policy.version} to active.`);
+      await onRefresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Policy promotion failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rollbackPolicy = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await apiFetch<{ policy: { version: number } }>('/api/v1/evolution/policies/rollback', {
+        method: 'POST',
+        body: '{}',
+      });
+      setMsg(`Rolled back active behavioral policy to v${res.policy.version}.`);
+      await onRefresh();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Policy rollback failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const behavioralPolicies = data.behavioralPolicies ?? [];
+
   return (
     <div className="space-y-6">
       {msg && <div className="p-3 rounded bg-blue-500/10 border border-blue-500/30 text-xs text-blue-200">{msg}</div>}
+
+      {/* System Evaluation & Behavioral Policy Lifecycle (Layer 3) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-display text-sm font-semibold text-slate-100">System Intelligence Evaluation Suite</h2>
+              <p className="text-xs text-slate-400">
+                Measures task correctness, RAG provenance separation, critic grounding, tool calling, and injection defense.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void runSystemEval()}
+              disabled={busy}
+              className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-xs font-medium text-white whitespace-nowrap shrink-0"
+            >
+              Run System Eval
+            </button>
+          </div>
+          {sysEvalOut ? (
+            <div className="space-y-2 text-xs font-mono tabular-nums">
+              <div className="p-2.5 bg-[#0B0F17] border border-slate-800 rounded flex justify-between">
+                <span className="text-slate-200">Overall Score: {sysEvalOut.overallScore}%</span>
+                <span className="text-slate-400">
+                  {sysEvalOut.scoreDelta !== null
+                    ? `Delta: ${sysEvalOut.scoreDelta >= 0 ? '+' : ''}${sysEvalOut.scoreDelta}%`
+                    : 'Baseline recorded'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                {Object.entries(sysEvalOut.categoryScores).map(([k, v]) => (
+                  <div key={k} className="p-2 bg-[#0B0F17] border border-slate-800 rounded flex justify-between">
+                    <span className="text-slate-400 truncate">{k}</span>
+                    <span className="text-slate-200">{v}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-slate-400">Click Run System Eval to compare current configuration against prior baseline.</div>
+          )}
+        </div>
+
+        <div className="bg-[#111827] border border-slate-800 rounded p-5 space-y-4">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-display text-sm font-semibold text-slate-100">
+              Layer 3 — Behavioral Policy Versions ({behavioralPolicies.length})
+            </h2>
+            <button
+              type="button"
+              onClick={() => void rollbackPolicy()}
+              disabled={busy}
+              className="px-2.5 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200 whitespace-nowrap shrink-0"
+            >
+              Rollback Policy
+            </button>
+          </div>
+          <form onSubmit={proposePolicy} className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            <input
+              type="text"
+              value={policyTitle}
+              onChange={(e) => setPolicyTitle(e.target.value)}
+              placeholder="Policy version title"
+              aria-label="Policy title"
+              required
+              className="px-3 py-1.5 bg-[#0B0F17] border border-slate-700 rounded text-slate-100"
+            />
+            <div className="flex gap-2">
+              <input
+                type="number"
+                min={1}
+                max={12}
+                value={policyTopK}
+                onChange={(e) => setPolicyTopK(Number(e.target.value))}
+                aria-label="RAG top K"
+                title="ragTopK"
+                className="w-20 px-2 py-1.5 bg-[#0B0F17] border border-slate-700 rounded text-slate-100 font-mono tabular-nums"
+              />
+              <input
+                type="number"
+                step="0.05"
+                min={0.1}
+                max={0.95}
+                value={policyMinRel}
+                onChange={(e) => setPolicyMinRel(Number(e.target.value))}
+                aria-label="Minimum reliability"
+                title="minReliability"
+                className="w-24 px-2 py-1.5 bg-[#0B0F17] border border-slate-700 rounded text-slate-100 font-mono tabular-nums"
+              />
+              <button
+                type="submit"
+                disabled={busy}
+                className="flex-1 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium whitespace-nowrap"
+              >
+                Propose & Test
+              </button>
+            </div>
+            <input
+              type="text"
+              value={policyHypothesis}
+              onChange={(e) => setPolicyHypothesis(e.target.value)}
+              placeholder="Experiment hypothesis..."
+              aria-label="Policy hypothesis"
+              required
+              className="sm:col-span-2 px-3 py-1.5 bg-[#0B0F17] border border-slate-700 rounded text-slate-100"
+            />
+          </form>
+          <div className="divide-y divide-slate-800/80 max-h-36 overflow-y-auto">
+            {behavioralPolicies.map((p) => (
+              <div key={p.id} className="py-2 flex items-center justify-between gap-3 text-xs">
+                <div className="min-w-0">
+                  <div className="text-slate-200 truncate">v{p.version} · {p.title}</div>
+                  <div className="font-mono text-[11px] text-slate-400 tabular-nums">
+                    {p.status} · topK={p.config.ragTopK} · minRel={p.config.minReliability}
+                  </div>
+                </div>
+                {(p.status === 'candidate' || p.status === 'rolled_back') && (
+                  <button
+                    type="button"
+                    onClick={() => void promotePolicy(p.id)}
+                    className="px-2.5 py-1 rounded border border-emerald-500/40 text-emerald-300 text-[11px] whitespace-nowrap shrink-0"
+                  >
+                    Promote
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
 
       {/* Layer C Proposal Launcher + Layer D Dataset Builder */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

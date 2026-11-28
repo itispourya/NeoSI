@@ -1,8 +1,22 @@
+import { normalizeMultilingualQuery } from '../business/language.ts';
 import { getDb, type MemorySearchResult } from '../db/adapter.ts';
 import type { EpistemicStatus, MemoryType, RetentionPolicy, SkillRecord } from '../db/schema.ts';
 import { cosineSimilarity } from '../db/vector.ts';
 import { sanitizeUntrustedContent } from '../security/promptGuard.ts';
 import { embeddingEngine } from '../inference/embeddings.ts';
+
+export interface RagDiagnostics {
+  originalQuery: string;
+  normalizedQuery: string;
+  policyVersion: number;
+  minReliability: number;
+  ragTopK: number;
+  totalHitsBeforeFilter: number;
+  filteredOutLowReliability: number;
+  hitsByLayer: Record<string, number>;
+  vectorHits: number;
+  lexicalHits: number;
+}
 
 export interface RagContextBundle {
   working: MemorySearchResult[];
@@ -13,86 +27,190 @@ export interface RagContextBundle {
   organizational: MemorySearchResult[];
   temporal: MemorySearchResult[];
   skills: SkillRecord[];
+  diagnostics?: RagDiagnostics;
 }
 
-export async function retrieveRagContext(query: string, tenantId = 'global', limitPerType = 3): Promise<RagContextBundle> {
-  const db = await getDb();
-  const emb = await embeddingEngine.embed(query);
-  const nowIso = new Date().toISOString();
+function filterByPolicyAndFreshness(
+  items: MemorySearchResult[],
+  minReliability: number,
+  nowMs: number
+): { kept: MemorySearchResult[]; filteredOut: number } {
+  const kept: MemorySearchResult[] = [];
+  let filteredOut = 0;
+  for (const m of items) {
+    if (m.superseded_by) {
+      filteredOut++;
+      continue;
+    }
+    if (m.valid_to && Date.parse(m.valid_to) < nowMs) {
+      filteredOut++;
+      continue;
+    }
+    if (m.reliability_score < minReliability) {
+      filteredOut++;
+      continue;
+    }
+    kept.push(m);
+  }
+  return { kept, filteredOut };
+}
 
-  const [working, episodic, semantic, procedural, personal, organizational, temporal, allSkills] = await Promise.all([
-    db.searchMemories(emb.vector, { memoryType: 'working', tenantId, queryText: query, queryEmbeddingModel: emb.model, limit: limitPerType, minScore: 0.02 }),
-    db.searchMemories(emb.vector, { memoryType: 'episodic', tenantId, queryText: query, queryEmbeddingModel: emb.model, limit: limitPerType, minScore: 0.02 }),
-    db.searchMemories(emb.vector, { memoryType: 'semantic', tenantId, includeGlobal: true, queryText: query, queryEmbeddingModel: emb.model, limit: limitPerType, minScore: 0.02 }),
-    db.searchMemories(emb.vector, { memoryType: 'procedural', tenantId, includeGlobal: true, queryText: query, queryEmbeddingModel: emb.model, limit: limitPerType, minScore: 0.02 }),
-    db.searchMemories(emb.vector, { memoryType: 'personal', tenantId, queryText: query, queryEmbeddingModel: emb.model, limit: 2, minScore: 0.03 }),
-    db.searchMemories(emb.vector, { memoryType: 'organizational', tenantId, queryText: query, queryEmbeddingModel: emb.model, limit: 2, minScore: 0.03 }),
-    db.searchMemories(emb.vector, { memoryType: 'temporal', tenantId, includeGlobal: true, validAt: nowIso, queryText: query, queryEmbeddingModel: emb.model, limit: 2, minScore: 0.02 }),
+export async function retrieveRagContext(query: string, tenantId = 'global', limitPerType?: number): Promise<RagContextBundle> {
+  const db = await getDb();
+  const activePolicy = await db.getActiveBehavioralPolicy().catch(() => null);
+  const policyTopK = limitPerType ?? activePolicy?.config.ragTopK ?? 3;
+  const minReliability = activePolicy?.config.minReliability ?? 0.35;
+  const normalizedQuery = normalizeMultilingualQuery(query) || query;
+  const emb = await embeddingEngine.embed(normalizedQuery);
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+
+  const [rawWorking, rawEpisodic, rawSemantic, rawProcedural, rawPersonal, rawOrganizational, rawTemporal, allSkills] = await Promise.all([
+    db.searchMemories(emb.vector, { memoryType: 'working', tenantId, queryText: normalizedQuery, queryEmbeddingModel: emb.model, limit: policyTopK, minScore: 0.02 }),
+    db.searchMemories(emb.vector, { memoryType: 'episodic', tenantId, queryText: normalizedQuery, queryEmbeddingModel: emb.model, limit: policyTopK, minScore: 0.02 }),
+    db.searchMemories(emb.vector, { memoryType: 'semantic', tenantId, includeGlobal: true, queryText: normalizedQuery, queryEmbeddingModel: emb.model, limit: policyTopK, minScore: 0.02 }),
+    db.searchMemories(emb.vector, { memoryType: 'procedural', tenantId, includeGlobal: true, queryText: normalizedQuery, queryEmbeddingModel: emb.model, limit: policyTopK, minScore: 0.02 }),
+    db.searchMemories(emb.vector, { memoryType: 'personal', tenantId, queryText: normalizedQuery, queryEmbeddingModel: emb.model, limit: 2, minScore: 0.03 }),
+    db.searchMemories(emb.vector, { memoryType: 'organizational', tenantId, queryText: normalizedQuery, queryEmbeddingModel: emb.model, limit: 2, minScore: 0.03 }),
+    db.searchMemories(emb.vector, { memoryType: 'temporal', tenantId, includeGlobal: true, validAt: nowIso, queryText: normalizedQuery, queryEmbeddingModel: emb.model, limit: 2, minScore: 0.02 }),
     db.listSkills(),
   ]);
 
-  const queryLower = query.toLowerCase();
-  const words = queryLower.split(/\s+/).filter((w) => w.length > 2);
+  const w = filterByPolicyAndFreshness(rawWorking, 0.25, nowMs);
+  const e = filterByPolicyAndFreshness(rawEpisodic, 0.25, nowMs);
+  const s = filterByPolicyAndFreshness(rawSemantic, minReliability, nowMs);
+  const pr = filterByPolicyAndFreshness(rawProcedural, minReliability, nowMs);
+  const pe = filterByPolicyAndFreshness(rawPersonal, 0.25, nowMs);
+  const org = filterByPolicyAndFreshness(rawOrganizational, 0.25, nowMs);
+  const tm = filterByPolicyAndFreshness(rawTemporal, minReliability, nowMs);
+
+  const queryLower = normalizedQuery.toLowerCase();
+  const words = queryLower.split(/\s+/).filter((word) => word.length > 2);
   const skills = allSkills
-    .map((s) => {
-      const hay = `${s.title} ${s.domain} ${s.content}`.toLowerCase();
-      const hits = words.filter((w) => hay.includes(w)).length;
-      return { skill: s, hits };
+    .map((skill) => {
+      const hay = `${skill.title} ${skill.domain} ${skill.content}`.toLowerCase();
+      const hits = words.filter((word) => hay.includes(word)).length;
+      return { skill, hits };
     })
     .filter((x) => x.hits > 0)
     .sort((a, b) => b.hits - a.hits)
     .slice(0, 3)
     .map((x) => x.skill);
 
-  return { working, episodic, semantic, procedural, personal, organizational, temporal, skills };
+  const allRaw = [...rawWorking, ...rawEpisodic, ...rawSemantic, ...rawProcedural, ...rawPersonal, ...rawOrganizational, ...rawTemporal];
+  const allKept = [...w.kept, ...e.kept, ...s.kept, ...pr.kept, ...pe.kept, ...org.kept, ...tm.kept];
+  const diagnostics: RagDiagnostics = {
+    originalQuery: query,
+    normalizedQuery,
+    policyVersion: activePolicy?.version ?? 1,
+    minReliability,
+    ragTopK: policyTopK,
+    totalHitsBeforeFilter: allRaw.length,
+    filteredOutLowReliability: w.filteredOut + e.filteredOut + s.filteredOut + pr.filteredOut + pe.filteredOut + org.filteredOut + tm.filteredOut,
+    hitsByLayer: {
+      working: w.kept.length,
+      episodic: e.kept.length,
+      semantic: s.kept.length,
+      procedural: pr.kept.length,
+      personal: pe.kept.length,
+      organizational: org.kept.length,
+      temporal: tm.kept.length,
+      skills: skills.length,
+    },
+    vectorHits: allKept.filter((m) => m.similarity > 0.1).length,
+    lexicalHits: allKept.filter((m) => m.hybridScore - m.similarity * 0.35 > 0.05).length,
+  };
+
+  return {
+    working: w.kept,
+    episodic: e.kept,
+    semantic: s.kept,
+    procedural: pr.kept,
+    personal: pe.kept,
+    organizational: org.kept,
+    temporal: tm.kept,
+    skills,
+    diagnostics,
+  };
+}
+
+export async function getRetrievalDiagnostics(query: string, tenantId = 'global'): Promise<{
+  diagnostics: RagDiagnostics;
+  topMatches: Array<{ id: string; memoryType: MemoryType; title: string; epistemicStatus: EpistemicStatus; reliability: number; score: number; sourceUrl: string | null }>;
+}> {
+  const bundle = await retrieveRagContext(query, tenantId);
+  const all = [
+    ...bundle.semantic,
+    ...bundle.procedural,
+    ...bundle.organizational,
+    ...bundle.personal,
+    ...bundle.temporal,
+    ...bundle.episodic,
+    ...bundle.working,
+  ]
+    .sort((a, b) => b.hybridScore - a.hybridScore)
+    .slice(0, 12)
+    .map((m) => ({
+      id: m.id,
+      memoryType: m.memory_type,
+      title: m.title,
+      epistemicStatus: m.epistemic_status,
+      reliability: m.reliability_score,
+      score: Number(m.hybridScore.toFixed(3)),
+      sourceUrl: m.source_url,
+    }));
+  return {
+    diagnostics: bundle.diagnostics!,
+    topMatches: all,
+  };
 }
 
 export function formatRagContextForPrompt(bundle: RagContextBundle): string {
   const sections: string[] = [];
   if (bundle.skills.length > 0) {
     sections.push(
-      '### Active Skill Registry Playbooks\n' +
+      '### Active Skill Registry Playbooks [provenance=procedural_skill]\n' +
         bundle.skills.map((s) => `- **${s.title}** (v${s.version}, ${s.domain}):\n${s.content.slice(0, 500)}`).join('\n')
     );
   }
   if (bundle.procedural.length > 0) {
     sections.push(
-      '### Procedural Lessons\n' +
+      '### Procedural Lessons [provenance=memory_procedural]\n' +
         bundle.procedural.map((m) => `- [${m.topic} | ${m.epistemic_status}] ${m.title}: ${m.content}`).join('\n')
     );
   }
   if (bundle.organizational.length > 0) {
     sections.push(
-      '### Organizational Context\n' +
+      '### Organizational Context [provenance=business_context]\n' +
         bundle.organizational.map((m) => `- [${m.epistemic_status}] ${m.title}: ${m.content.slice(0, 300)}`).join('\n')
     );
   }
   if (bundle.personal.length > 0) {
     sections.push(
-      '### User Personal Context\n' +
+      '### User Personal Context [provenance=user_context]\n' +
         bundle.personal.map((m) => `- ${m.title}: ${m.content.slice(0, 260)}`).join('\n')
     );
   }
   if (bundle.semantic.length > 0) {
     sections.push(
-      '### Verified Semantic Knowledge\n' +
+      '### Semantic Knowledge [provenance=public_web_and_docs]\n' +
         bundle.semantic
           .map(
             (m) =>
-              `- [${m.topic} | ${m.epistemic_status} | rel=${m.reliability_score}] ${m.title}: ${m.content.slice(0, 380)}${m.source_url ? ` (${m.source_url})` : ''}`
+              `- [${m.topic} | ${m.epistemic_status === 'verified_fact' ? 'verified' : m.epistemic_status} | rel=${m.reliability_score}] ${m.title}: ${m.content.slice(0, 380)}${m.source_url ? ` (${m.source_url})` : ''}`
           )
           .join('\n')
     );
   }
   if (bundle.temporal.length > 0) {
     sections.push(
-      '### Active Temporal Facts\n' +
+      '### Active Temporal Facts [provenance=temporal_memory]\n' +
         bundle.temporal.map((m) => `- [${m.valid_from || 'active'}] ${m.title}: ${m.content.slice(0, 260)}`).join('\n')
     );
   }
   if (bundle.episodic.length > 0) {
     sections.push(
-      '### Recent Episodic Outcomes\n' +
+      '### Recent Episodic Outcomes [provenance=episodic_memory]\n' +
         bundle.episodic.map((m) => `- [${m.epistemic_status}] ${m.title}: ${m.content.slice(0, 240)}`).join('\n')
     );
   }

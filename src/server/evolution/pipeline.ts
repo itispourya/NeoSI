@@ -5,8 +5,15 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '../config/env.ts';
 import { getDb } from '../db/adapter.ts';
-import type { EvolutionExperimentRecord, SelfUpgradeRecord, SkillRecord, TrainingJobRecord } from '../db/schema.ts';
-import { runModelBenchmarkSuite } from '../inference/evaluator.ts';
+import type {
+  BehavioralPolicyConfig,
+  BehavioralPolicyRecord,
+  EvolutionExperimentRecord,
+  SelfUpgradeRecord,
+  SkillRecord,
+  TrainingJobRecord,
+} from '../db/schema.ts';
+import { runModelBenchmarkSuite, runSystemEvaluationSuite } from '../inference/evaluator.ts';
 import { neoInferenceEngine } from '../inference/registry.ts';
 import { promoteVerifiedModule, removePromotedModule } from '../neo/sovereignEngine.ts';
 import { runTestsInSandbox } from '../sandbox/runner.ts';
@@ -35,6 +42,19 @@ export function isProtectedPath(filePath: string): boolean {
 export function validateTargetFiles(files: string[]): { allowed: boolean; blockedFiles: string[] } {
   const blockedFiles = files.filter((f) => isProtectedPath(f));
   return { allowed: blockedFiles.length === 0, blockedFiles };
+}
+
+export function scanCandidateCodeSecurity(code: string): { safe: boolean; violations: string[] } {
+  const checks: Array<{ pattern: RegExp; message: string }> = [
+    { pattern: /\beval\s*\(/, message: 'Forbidden dynamic eval()' },
+    { pattern: /\bnew\s+Function\b/, message: 'Forbidden new Function() constructor' },
+    { pattern: /\bchild_process\b|\bexecSync\b|\bspawnSync\b|\bexecFile\b/, message: 'Forbidden child_process invocation' },
+    { pattern: /\bprocess\.env\b/, message: 'Forbidden environment variable access' },
+    { pattern: /\b__proto__\b|\bconstructor\.constructor\b/, message: 'Forbidden prototype pollution vector' },
+    { pattern: /\brequire\s*\(\s*['"](?:fs|net|http|https|dgram|tls|vm)['"]\s*\)/, message: 'Forbidden privileged Node built-in module import' },
+  ];
+  const violations = checks.filter((c) => c.pattern.test(code)).map((c) => c.message);
+  return { safe: violations.length === 0, violations };
 }
 
 export function evaluateBenchmarkGate(
@@ -109,46 +129,134 @@ export async function evaluateSkill(idOrSlug: string): Promise<{
 }
 
 /**
- * Layer B: Controlled Cognitive Configuration A/B Experiment
+ * Layer 3 Behavioral Policy Lifecycle & Controlled A/B Experiment
  */
+export async function proposeBehavioralPolicy(input: {
+  title: string;
+  hypothesis: string;
+  patch: Partial<BehavioralPolicyConfig>;
+  autoPromote?: boolean;
+}): Promise<{ policy: BehavioralPolicyRecord; experiment: EvolutionExperimentRecord }> {
+  const db = await getDb();
+  const [existingPolicies, currentActive] = await Promise.all([
+    db.listBehavioralPolicies(20),
+    db.getActiveBehavioralPolicy(),
+  ]);
+  const maxVersion = existingPolicies.reduce((m, p) => Math.max(m, p.version), 0);
+  const baseConfig: BehavioralPolicyConfig = currentActive?.config || {
+    ragTopK: 4,
+    minReliability: 0.4,
+    hybridVectorWeight: 0.65,
+    hybridLexicalWeight: 0.35,
+    preferLocalForPrivate: true,
+    preferFastForSimple: true,
+    maxPlanSteps: 10,
+    plannerRetryBudget: 2,
+    systemDirectiveSuffix: '',
+    extraLanguages: {},
+  };
+  const candidateConfig: BehavioralPolicyConfig = {
+    ...baseConfig,
+    ...input.patch,
+  };
+
+  const [evalBefore, evalAfter] = await Promise.all([
+    runSystemEvaluationSuite({ policyConfig: baseConfig, persistRecord: false }),
+    runSystemEvaluationSuite({ policyConfig: candidateConfig, persistRecord: true }),
+  ]);
+
+  const noRegression =
+    evalAfter.evaluation.overall_score >= evalBefore.evaluation.overall_score &&
+    evalAfter.evaluation.passed_cases >= evalBefore.evaluation.passed_cases;
+
+  const experiment = await db.recordEvolutionExperiment({
+    layer: 'B',
+    title: input.title,
+    hypothesis: input.hypothesis,
+    config_before: baseConfig as unknown as Record<string, unknown>,
+    config_after: candidateConfig as unknown as Record<string, unknown>,
+    metrics_before: {
+      overallScore: evalBefore.evaluation.overall_score,
+      avgLatencyMs: evalBefore.evaluation.avg_latency_ms,
+      passedCases: evalBefore.evaluation.passed_cases,
+      totalCases: evalBefore.evaluation.total_cases,
+    },
+    metrics_after: {
+      overallScore: evalAfter.evaluation.overall_score,
+      avgLatencyMs: evalAfter.evaluation.avg_latency_ms,
+      passedCases: evalAfter.evaluation.passed_cases,
+      totalCases: evalAfter.evaluation.total_cases,
+      scoreDelta: Number((evalAfter.evaluation.overall_score - evalBefore.evaluation.overall_score).toFixed(1)),
+      configurationEvaluated: true,
+    },
+    status: noRegression ? 'validated' : 'rejected',
+  });
+
+  const willPromote = noRegression && Boolean(input.autoPromote);
+  if (willPromote && currentActive) {
+    await db.updateBehavioralPolicyStatus(currentActive.id, 'rolled_back');
+  }
+
+  const policy = await db.createBehavioralPolicy({
+    version: maxVersion + 1,
+    title: input.title,
+    status: willPromote ? 'active' : noRegression ? 'candidate' : 'rejected',
+    config: candidateConfig,
+    baseline_metrics: experiment.metrics_before,
+    candidate_metrics: experiment.metrics_after,
+    hypothesis: input.hypothesis,
+    promoted_at: willPromote ? new Date().toISOString() : null,
+  });
+
+  return { policy, experiment };
+}
+
+export async function promoteBehavioralPolicy(id: string): Promise<BehavioralPolicyRecord | null> {
+  const db = await getDb();
+  const policies = await db.listBehavioralPolicies(50);
+  const target = policies.find((p) => p.id === id);
+  if (!target) return null;
+  if (target.status === 'rejected') {
+    throw new Error('Rejected behavioral policies cannot be promoted.');
+  }
+  const active = policies.find((p) => p.status === 'active' && p.id !== id);
+  if (active) {
+    await db.updateBehavioralPolicyStatus(active.id, 'rolled_back');
+  }
+  return db.updateBehavioralPolicyStatus(target.id, 'active');
+}
+
+export async function rollbackBehavioralPolicy(targetId?: string): Promise<BehavioralPolicyRecord | null> {
+  const db = await getDb();
+  const policies = await db.listBehavioralPolicies(50);
+  const currentActive = policies.find((p) => p.status === 'active');
+  const candidate = targetId
+    ? policies.find((p) => p.id === targetId && p.status !== 'rejected')
+    : policies.find((p) => p.id !== currentActive?.id && (p.status === 'rolled_back' || p.status === 'candidate'));
+  if (!candidate) return null;
+  if (currentActive && currentActive.id !== candidate.id) {
+    await db.updateBehavioralPolicyStatus(currentActive.id, 'rolled_back');
+  }
+  return db.updateBehavioralPolicyStatus(candidate.id, 'active');
+}
+
 export async function runConfigExperiment(input: {
   title: string;
   hypothesis: string;
   configBefore: Record<string, unknown>;
   configAfter: Record<string, unknown>;
 }): Promise<EvolutionExperimentRecord> {
-  const db = await getDb();
-  const baseline = await runModelBenchmarkSuite('neo-embedded-core-v1');
-  // The candidate config is not yet connected to inference requests. Never label a same-config rerun as validation.
-
-  return db.recordEvolutionExperiment({
-    layer: 'B',
+  const { experiment } = await proposeBehavioralPolicy({
     title: input.title,
     hypothesis: input.hypothesis,
-    config_before: input.configBefore,
-    config_after: input.configAfter,
-    metrics_before: {
-      overallScore: baseline.overall_score,
-      avgLatencyMs: baseline.avg_latency_ms,
-      passedCases: baseline.passed_cases,
-      totalCases: baseline.total_cases,
-    },
-    metrics_after: {
-      overallScore: baseline.overall_score,
-      avgLatencyMs: baseline.avg_latency_ms,
-      passedCases: baseline.passed_cases,
-      totalCases: baseline.total_cases,
-      configurationApplied: false,
-      note: 'The candidate configuration has not been applied to the inference runtime; this experiment is inconclusive.',
-    },
-    status: 'inconclusive',
+    patch: input.configAfter as Partial<BehavioralPolicyConfig>,
+    autoPromote: false,
   });
+  return experiment;
 }
 
 /**
- * Layer C: Standalone candidate module generation and isolated tests.
- * The temporary Git repository is discarded after testing; the candidate is not benchmarked
- * against or integrated into the full Neo source tree at this stage.
+ * Layer C: Standalone candidate module generation, static security scan, and isolated tests.
  */
 async function stageInIsolatedGitWorkspace(
   branchName: string,
@@ -197,7 +305,6 @@ export async function runCodeEvolutionProposal(focusArea?: string): Promise<Self
   const recentErrors = telemetry.filter((t) => !t.success).slice(0, 5);
   const branchName = `self-upgrade/${Date.now()}-${(focusArea || 'optimization').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 24)}`;
 
-  // Measure real baseline benchmark BEFORE proposing/testing
   const baselineEval = await runModelBenchmarkSuite('neo-embedded-core-v1');
   const benchmarkBefore = {
     accuracyScore: baselineEval.overall_score,
@@ -256,16 +363,20 @@ test('tracks saved characters on oversized prompts', () => {
     };
   }
 
-  // Enforce protected boundary guardrail
+  // Enforce protected path guardrail AND static code security scan
   const guard = validateTargetFiles([draft.targetFile]);
-  if (!guard.allowed) {
+  const secScan = scanCandidateCodeSecurity(draft.handlerCode);
+  if (!guard.allowed || !secScan.safe) {
+    const reason = !guard.allowed
+      ? `BLOCKED BY PATH GUARDRAIL: ${guard.blockedFiles.join(', ')}`
+      : `BLOCKED BY SECURITY SCANNER: ${secScan.violations.join('; ')}`;
     return db.createUpgrade({
       title: draft.title,
-      diagnosis: `${draft.diagnosis} [BLOCKED BY GUARDRAIL: ${guard.blockedFiles.join(', ')}]`,
+      diagnosis: `${draft.diagnosis} [${reason}]`,
       branch_name: branchName,
       target_files: [draft.targetFile],
       unified_diff: buildUnifiedDiff(draft.targetFile, draft.handlerCode),
-      test_results: { passed: 0, failed: 1, total: 1, durationMs: 0, output: 'Blocked by protected-core guardrail' },
+      test_results: { passed: 0, failed: 1, total: 1, durationMs: 0, output: reason },
       benchmark_before: benchmarkBefore,
       benchmark_after: { ...benchmarkBefore, passRate: 0 },
       rollback_plan: draft.rollbackPlan,
@@ -274,13 +385,10 @@ test('tracks saved characters on oversized prompts', () => {
     });
   }
 
-  // Run tests inside isolated OS subprocess sandbox + commit to isolated git repo/worktree
   const sandboxReport = runTestsInSandbox(draft.handlerCode, draft.testCode, 2500);
   const gitWorkspace = await stageInIsolatedGitWorkspace(branchName, draft.targetFile, draft.handlerCode, draft.testCode);
   gitWorkspace.cleanup();
 
-  // The test runner validates only the standalone candidate module. The existing Neo model benchmark
-  // is not evidence of candidate-code impact, so keep it as a reference and disable auto-promotion.
   const allCandidateTestsPassed =
     sandboxReport.total > 0 &&
     sandboxReport.failed === 0 &&
@@ -291,7 +399,7 @@ test('tracks saved characters on oversized prompts', () => {
 
   const record = await db.createUpgrade({
     title: draft.title,
-    diagnosis: `${draft.diagnosis} [temporaryGitCommitCreated=${gitWorkspace.gitCommitted}; isolation=${sandboxReport.isolation}; candidateIntegrationBenchmark=not_run; automaticPromotion=disabled]`,
+    diagnosis: `${draft.diagnosis} [temporaryGitCommitCreated=${gitWorkspace.gitCommitted}; isolation=${sandboxReport.isolation}; securityScan=passed; automaticPromotion=disabled]`,
     branch_name: branchName,
     target_files: [draft.targetFile],
     unified_diff: buildUnifiedDiff(draft.targetFile, draft.handlerCode),

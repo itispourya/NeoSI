@@ -10,6 +10,7 @@ import { safeArithmeticEval } from '../inference/runtimes.ts';
 import { knowledgeGraph } from '../knowledge/graph.ts';
 import { retrieveRagContext, storeMemory } from '../knowledge/memory.ts';
 import { runAutonomousResearch } from '../knowledge/research.ts';
+import { executeOrQueueNeosAction } from '../neos/integration.ts';
 import { executeHandlerInSandbox } from '../sandbox/runner.ts';
 
 export interface ToolContext {
@@ -626,6 +627,91 @@ export class NeoToolRegistry {
         const rag = await retrieveRagContext(input.query, ctx.tenantId, 3);
         return {
           skills: rag.skills.map((s) => ({ id: s.id, slug: s.slug, title: s.title, domain: s.domain, version: s.version, excerpt: s.content.slice(0, 320) })),
+        };
+      },
+    });
+
+    this.register({
+      id: 'neos_discover_capabilities',
+      name: 'Neos Capability Registry Lookup',
+      version: '1.0.0',
+      description: 'Discovers enabled Neos module capabilities registered for the active tenant workspace.',
+      riskLevel: 'low',
+      requiredScopes: ['read'],
+      timeoutMs: 2500,
+      executionEnv: 'database',
+      inputJsonSchema: {
+        type: 'object',
+        properties: { moduleName: { type: 'string' } },
+      },
+      outputJsonSchema: { type: 'object', properties: { capabilities: { type: 'array' } } },
+      inputSchema: z.object({ moduleName: z.string().max(80).optional() }),
+      execute: async (input, ctx) => {
+        const db = await getDb();
+        const caps = await db.listNeosCapabilities(ctx.tenantId, true);
+        const filtered = input.moduleName
+          ? caps.filter((c) => c.module_name.toLowerCase() === input.moduleName!.toLowerCase())
+          : caps;
+        return {
+          count: filtered.length,
+          capabilities: filtered.map((c) => ({
+            capabilityId: c.capability_id,
+            moduleName: c.module_name,
+            title: c.title,
+            riskLevel: c.risk_level,
+            requiresConfirmation: c.requires_confirmation,
+            requiredScopes: c.required_scopes,
+          })),
+        };
+      },
+    });
+
+    this.register({
+      id: 'neos_propose_action',
+      name: 'Neos Gated Action Executor',
+      version: '1.0.0',
+      description: 'Validates and executes a Neos module capability, automatically queueing human confirmation for high-risk or financial actions.',
+      riskLevel: 'medium',
+      requiredScopes: ['write'],
+      timeoutMs: 8000,
+      executionEnv: 'neos-integration-gate',
+      inputJsonSchema: {
+        type: 'object',
+        required: ['capabilityId'],
+        properties: {
+          capabilityId: { type: 'string' },
+          payload: { type: 'object' },
+          actionSummary: { type: 'string' },
+        },
+      },
+      outputJsonSchema: { type: 'object', properties: { status: { type: 'string' } } },
+      inputSchema: z.object({
+        capabilityId: z.string().min(2).max(120),
+        payload: z.record(z.string(), z.unknown()).default({}),
+        actionSummary: z.string().max(300).optional(),
+      }),
+      execute: async (input, ctx) => {
+        const res = await executeOrQueueNeosAction({
+          tenantId: ctx.tenantId,
+          actor: ctx.actor,
+          scopes: ctx.scopes,
+          capabilityId: input.capabilityId,
+          payload: input.payload,
+          actionSummary: input.actionSummary,
+        });
+        if (!res.ok) throw new Error(res.error);
+        if (res.status === 'confirmation_required') {
+          return {
+            status: 'confirmation_required',
+            approvalId: res.approval.id,
+            capabilityId: res.capability.capability_id,
+            expiresAt: res.approval.expires_at,
+          };
+        }
+        return {
+          status: 'executed',
+          capabilityId: res.capability.capability_id,
+          result: res.result,
         };
       },
     });

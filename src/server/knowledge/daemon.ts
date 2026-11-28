@@ -4,6 +4,7 @@ import { chunkText } from '../db/vector.ts';
 import { distillTextLocally } from '../neo/sovereignEngine.ts';
 import { jobQueue } from '../queue/jobQueue.ts';
 import { discoverWebKnowledge, type DiscoveredSource } from '../search/webSearch.ts';
+import { ingestConfiguredFeeds, revalidateStaleKnowledgeSources } from './feeds.ts';
 import { knowledgeGraph } from './graph.ts';
 import { storeMemory } from './memory.ts';
 
@@ -22,13 +23,18 @@ async function distillSource(topic: string, source: DiscoveredSource) {
 export async function runKnowledgeCrawlForTopic(topic: string, streamId?: string, tenantId = 'global'): Promise<CrawlResult> {
   const db = await getDb();
   const discovered = await discoverWebKnowledge(topic);
-  const existingMemories = await db.listMemories({ memoryType: 'semantic', tenantId, limit: 200 });
+  const [existingMemories, existingSources] = await Promise.all([
+    db.listMemories({ memoryType: 'semantic', tenantId, limit: 200 }),
+    db.listKnowledgeSources(tenantId, 200),
+  ]);
   const existingUrls = new Set(existingMemories.map((m) => m.source_url).filter(Boolean));
+  const hashByUrl = new Map(existingSources.map((s) => [s.url, s.content_hash]));
 
   let memoriesStored = 0;
   let skillsUpdated = 0;
 
   for (const src of discovered) {
+    const unchangedContent = hashByUrl.get(src.url) === src.contentHash;
     await db.upsertKnowledgeSource({
       tenant_id: tenantId,
       url: src.url,
@@ -40,6 +46,7 @@ export async function runKnowledgeCrawlForTopic(topic: string, streamId?: string
       reliability_score: src.reliabilityScore,
       quality_breakdown: src.qualityBreakdown,
       content_hash: src.contentHash,
+      review_at: new Date(Date.now() + 14 * 86_400_000).toISOString(),
       injection_flagged: src.injectionFlagged,
     });
 
@@ -47,7 +54,7 @@ export async function runKnowledgeCrawlForTopic(topic: string, streamId?: string
       continue;
     }
 
-    if (existingUrls.has(src.url) && existingMemories.some((m) => m.source_url === src.url && m.topic === topic)) {
+    if (unchangedContent || (existingUrls.has(src.url) && existingMemories.some((m) => m.source_url === src.url && m.topic === topic))) {
       continue;
     }
 
@@ -65,6 +72,7 @@ export async function runKnowledgeCrawlForTopic(topic: string, streamId?: string
           ...distilled.structuredFacts,
           provider: src.provider,
           publishedAt: src.publishedAt || null,
+          contentHash: src.contentHash,
           injectionFlagged: src.injectionFlagged,
         },
         sourceUrl: src.url,
@@ -115,7 +123,7 @@ class KnowledgeDaemonService {
     this.timer.unref();
   }
 
-  async runScheduledCycle(): Promise<{ queuedJobs: number }> {
+  async runScheduledCycle(): Promise<{ queuedJobs: number; feedsIngested?: number; staleRevalidated?: number }> {
     if (this.runningCycle) return { queuedJobs: 0 };
     this.runningCycle = true;
     try {
@@ -133,7 +141,17 @@ class KnowledgeDaemonService {
           queuedJobs++;
         }
       }
-      return { queuedJobs };
+
+      const [feedReport, revalReport] = await Promise.all([
+        ingestConfiguredFeeds({ tenantId: 'global' }).catch(() => ({ itemsIngested: 0 })),
+        revalidateStaleKnowledgeSources('global').catch(() => ({ staleCount: 0 })),
+      ]);
+
+      return {
+        queuedJobs,
+        feedsIngested: feedReport.itemsIngested,
+        staleRevalidated: revalReport.staleCount,
+      };
     } finally {
       this.runningCycle = false;
     }

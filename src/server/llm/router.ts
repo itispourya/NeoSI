@@ -1,7 +1,15 @@
 import type { SupportedLanguage } from '../db/schema.ts';
 import { embeddingEngine } from '../inference/embeddings.ts';
 import { neoInferenceEngine } from '../inference/registry.ts';
-import type { ModelRole, RuntimeKind } from '../inference/types.ts';
+import type {
+  ModelRole,
+  ResponseFormatSpec,
+  RoutingPolicyHint,
+  RuntimeKind,
+  ToolCallResult,
+  ToolChoiceOption,
+  ToolDefinition,
+} from '../inference/types.ts';
 
 export type LlmProviderName = RuntimeKind;
 
@@ -15,6 +23,14 @@ export interface LlmRequest {
   preferredProvider?: LlmProviderName;
   preferredModel?: string;
   responseMimeType?: 'application/json' | 'text/plain';
+  responseFormat?: ResponseFormatSpec;
+  tools?: ToolDefinition[];
+  toolChoice?: ToolChoiceOption;
+  temperature?: number;
+  maxTokens?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  routingHint?: RoutingPolicyHint;
 }
 
 export interface LlmResponse {
@@ -25,6 +41,8 @@ export interface LlmResponse {
   completionTokens: number;
   estimatedCostUsd: number;
   latencyMs: number;
+  finishReason?: 'stop' | 'tool_calls' | 'length';
+  toolCalls?: ToolCallResult[];
 }
 
 /**
@@ -42,7 +60,14 @@ export async function routeLlmCall(req: LlmRequest): Promise<LlmResponse> {
     language: req.language,
     preferredRuntime: req.preferredProvider,
     preferredModelId: req.preferredModel,
-    responseFormat: req.responseMimeType === 'application/json' ? 'json' : 'text',
+    responseFormat: req.responseFormat || (req.responseMimeType === 'application/json' ? 'json' : 'text'),
+    tools: req.tools,
+    toolChoice: req.toolChoice,
+    temperature: req.temperature,
+    maxTokens: req.maxTokens,
+    timeoutMs: req.timeoutMs,
+    signal: req.signal,
+    routingHint: req.routingHint,
   });
 
   return {
@@ -51,8 +76,10 @@ export async function routeLlmCall(req: LlmRequest): Promise<LlmResponse> {
     model: res.modelId,
     promptTokens: res.promptTokens,
     completionTokens: res.completionTokens,
-    estimatedCostUsd: 0,
+    estimatedCostUsd: res.estimatedCostUsd ?? 0,
     latencyMs: res.latencyMs,
+    finishReason: res.finishReason,
+    toolCalls: res.toolCalls,
   };
 }
 
@@ -67,6 +94,11 @@ export async function routeJsonLlmCall<T>(req: LlmRequest): Promise<{ data: T; m
     preferredRuntime: req.preferredProvider,
     preferredModelId: req.preferredModel,
     responseFormat: 'json',
+    temperature: req.temperature,
+    maxTokens: req.maxTokens,
+    timeoutMs: req.timeoutMs,
+    signal: req.signal,
+    routingHint: req.routingHint,
   });
 
   return {
@@ -77,8 +109,9 @@ export async function routeJsonLlmCall<T>(req: LlmRequest): Promise<{ data: T; m
       model: response.modelId,
       promptTokens: response.promptTokens,
       completionTokens: response.completionTokens,
-      estimatedCostUsd: 0,
+      estimatedCostUsd: response.estimatedCostUsd ?? 0,
       latencyMs: response.latencyMs,
+      finishReason: response.finishReason,
     },
   };
 }
@@ -93,6 +126,14 @@ export async function* streamLlmCall(req: LlmRequest): AsyncGenerator<{ chunk?: 
     language: req.language,
     preferredRuntime: req.preferredProvider,
     preferredModelId: req.preferredModel,
+    responseFormat: req.responseFormat,
+    tools: req.tools,
+    toolChoice: req.toolChoice,
+    temperature: req.temperature,
+    maxTokens: req.maxTokens,
+    timeoutMs: req.timeoutMs,
+    signal: req.signal,
+    routingHint: req.routingHint,
   })) {
     if (part.type === 'delta') {
       yield { chunk: part.text };
@@ -104,8 +145,10 @@ export async function* streamLlmCall(req: LlmRequest): AsyncGenerator<{ chunk?: 
           model: part.response.modelId,
           promptTokens: part.response.promptTokens,
           completionTokens: part.response.completionTokens,
-          estimatedCostUsd: 0,
+          estimatedCostUsd: part.response.estimatedCostUsd ?? 0,
           latencyMs: part.response.latencyMs,
+          finishReason: part.response.finishReason,
+          toolCalls: part.response.toolCalls,
         },
       };
     }
