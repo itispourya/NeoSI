@@ -251,6 +251,12 @@ export class PostgresNeoDatabase implements NeoDatabase {
     return rows[0];
   }
 
+  async deleteConversation(id: string, tenantId: string): Promise<boolean> {
+    await this.pool.query('DELETE FROM messages WHERE conversation_id = $1 AND tenant_id = $2', [id, tenantId]);
+    const res = await this.pool.query('DELETE FROM conversations WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+    return (res.rowCount ?? 0) > 0;
+  }
+
   async listMessages(conversationId: string, tenantId: string, limit = 100): Promise<MessageRecord[]> {
     const { rows } = await this.pool.query(
       'SELECT * FROM messages WHERE conversation_id = $1 AND tenant_id = $2 ORDER BY created_at ASC LIMIT $3',

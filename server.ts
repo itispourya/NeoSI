@@ -13,6 +13,7 @@ import { forgeRouter } from './src/server/routes/forge.ts';
 import { knowledgeRouter } from './src/server/routes/knowledge.ts';
 import { memoryRouter } from './src/server/routes/memory.ts';
 import { modelsRouter } from './src/server/routes/models.ts';
+import { openaiCompatRouter } from './src/server/routes/openaiCompat.ts';
 import { systemRouter } from './src/server/routes/system.ts';
 import { tasksRouter } from './src/server/routes/tasks.ts';
 import { toolsRouter } from './src/server/routes/tools.ts';
@@ -37,7 +38,8 @@ async function startServer() {
   app.use(securityHeadersAndTracingMiddleware);
   app.use(express.json({ limit: '4mb' }));
 
-  // Mount Neo Cognitive Gateway & Admin Control Plane
+  // Mount Neo Cognitive Gateway, OpenAI-Compatible API (/v1 & /api/v1), and Admin Control Plane
+  app.use('/v1', openaiCompatRouter);
   app.use('/api/v1', systemRouter);
   app.use('/api/v1', coreRouter);
   app.use('/api/v1', tasksRouter);
@@ -45,6 +47,7 @@ async function startServer() {
   app.use('/api/v1', knowledgeRouter);
   app.use('/api/v1', toolsRouter);
   app.use('/api/v1', modelsRouter);
+  app.use('/api/v1', openaiCompatRouter);
   app.use('/api/v1', evolutionRouter);
   app.use('/api/v1', forgeRouter);
   app.use('/api/admin', adminRouter);

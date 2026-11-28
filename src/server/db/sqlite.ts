@@ -628,6 +628,12 @@ export class SqliteNeoDatabase implements NeoDatabase {
     return rec;
   }
 
+  async deleteConversation(id: string, tenantId: string): Promise<boolean> {
+    this.db.prepare('DELETE FROM messages WHERE conversation_id = ? AND tenant_id = ?').run(id, tenantId);
+    const res = this.db.prepare('DELETE FROM conversations WHERE id = ? AND tenant_id = ?').run(id, tenantId);
+    return res.changes > 0;
+  }
+
   async listMessages(conversationId: string, tenantId: string, limit = 100): Promise<MessageRecord[]> {
     const rows = this.db
       .prepare('SELECT * FROM messages WHERE conversation_id = ? AND tenant_id = ? ORDER BY created_at ASC LIMIT ?')

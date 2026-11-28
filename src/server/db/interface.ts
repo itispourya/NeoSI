@@ -89,6 +89,7 @@ export interface NeoDatabase {
   listConversations(tenantId: string, limit?: number): Promise<ConversationRecord[]>;
   getConversationById(id: string, tenantId: string): Promise<ConversationRecord | null>;
   createConversation(input: Omit<ConversationRecord, 'id' | 'created_at' | 'updated_at'>): Promise<ConversationRecord>;
+  deleteConversation(id: string, tenantId: string): Promise<boolean>;
   listMessages(conversationId: string, tenantId: string, limit?: number): Promise<MessageRecord[]>;
   addMessage(input: Omit<MessageRecord, 'id' | 'created_at'>): Promise<MessageRecord>;
 

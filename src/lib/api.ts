@@ -52,6 +52,7 @@ export async function streamChat(
     onDelta: (chunk: string) => void;
     onDone?: (meta: Record<string, unknown>) => void;
     onError: (msg: string) => void;
+    signal?: AbortSignal;
   }
 ) {
   const headers: Record<string, string> = {
@@ -65,6 +66,7 @@ export async function streamChat(
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    signal: handlers.signal,
   });
 
   if (!res.ok || !res.body) {

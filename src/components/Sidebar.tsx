@@ -5,6 +5,7 @@ import {
   GitBranch,
   KeyRound,
   ListChecks,
+  MessageSquare,
   Terminal,
   Wrench,
   X,
@@ -20,6 +21,7 @@ interface SidebarProps {
 
 const NAV_ITEMS: Array<{ id: NavSection; label: string; icon: typeof Activity }> = [
   { id: 'overview', label: 'Overview', icon: Activity },
+  { id: 'chat', label: 'Chatbot', icon: MessageSquare },
   { id: 'tasks', label: 'Agent Tasks', icon: ListChecks },
   { id: 'workbench', label: 'Cognitive Lab', icon: Terminal },
   { id: 'memory', label: 'Memory & Graph', icon: Brain },

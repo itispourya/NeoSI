@@ -20,7 +20,7 @@ export type ModelRole =
   | 'speech_generation'
   | 'specialized';
 
-export type RuntimeKind = 'embedded' | 'ollama' | 'vllm' | 'tensorrt-llm' | 'transformers';
+export type RuntimeKind = 'embedded' | 'ollama' | 'vllm' | 'tensorrt-llm' | 'transformers' | 'custom-llm';
 
 export interface ToolDefinition {
   name: string;

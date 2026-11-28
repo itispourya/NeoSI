@@ -15,7 +15,11 @@ const cliPortArg =
   cliPortIdx !== -1 && process.argv[cliPortIdx + 1]
     ? process.argv[cliPortIdx + 1]
     : process.argv.find((a) => a.startsWith('--port='))?.split('=')[1];
-const rawPort = stripQuotes(cliPortArg) || stripQuotes(process.env.NEO_PORT) || stripQuotes(process.env.PORT) || '3000';
+const rawPort =
+  stripQuotes(cliPortArg) ||
+  stripQuotes(process.env.NEO_PORT) ||
+  (nodeEnv === 'production' ? stripQuotes(process.env.PORT) : '') ||
+  '3000';
 const parsedPort = Number(rawPort);
 const port = Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535 ? parsedPort : 3000;
 if (port !== parsedPort) {
@@ -32,7 +36,7 @@ if (trustProxyHops !== parsedTrustProxyHops) {
   console.warn(`[Neo Env Warning] Invalid NEO_TRUST_PROXY_HOPS "${rawTrustProxyHops}"; falling back to 0.`);
 }
 
-const SUPPORTED_RUNTIMES = ['auto', 'vllm', 'ollama', 'tensorrt-llm', 'transformers', 'embedded'] as const;
+const SUPPORTED_RUNTIMES = ['auto', 'vllm', 'ollama', 'tensorrt-llm', 'transformers', 'custom-llm', 'embedded'] as const;
 const rawRuntimeDefault = stripQuotes(process.env.NEO_RUNTIME_DEFAULT).toLowerCase() || 'auto';
 const runtimeDefault: RuntimeBackendKind = (SUPPORTED_RUNTIMES as readonly string[]).includes(rawRuntimeDefault)
   ? (rawRuntimeDefault as RuntimeBackendKind)
@@ -49,7 +53,8 @@ if (sandboxMode !== rawSandboxMode) {
 }
 
 const configuredAdminPasscode = stripQuotes(process.env.NEO_ADMIN_PASSCODE || process.env.ADMIN_PASSCODE);
-const configuredAdminSetupToken = stripQuotes(process.env.NEO_ADMIN_SETUP_TOKEN);
+const rawAdminSetupToken = stripQuotes(process.env.NEO_ADMIN_SETUP_TOKEN);
+let configuredAdminSetupToken = rawAdminSetupToken;
 if (nodeEnv === 'production' && Buffer.byteLength(configuredSessionSecret, 'utf8') < 32) {
   throw new Error('Production requires NEO_SESSION_SECRET with at least 32 bytes. Generate one with: openssl rand -hex 32');
 }
@@ -57,10 +62,11 @@ if (nodeEnv === 'production' && configuredAdminPasscode && configuredAdminPassco
   throw new Error('Production NEO_ADMIN_PASSCODE must be at least 12 characters.');
 }
 if (configuredAdminSetupToken && Buffer.byteLength(configuredAdminSetupToken, 'utf8') < 32) {
-  throw new Error('NEO_ADMIN_SETUP_TOKEN must be at least 32 bytes.');
+  console.warn('[Neo Env Warning] NEO_ADMIN_SETUP_TOKEN must be at least 32 bytes; ignoring short token.');
+  configuredAdminSetupToken = '';
 }
 
-export type RuntimeBackendKind = 'auto' | 'vllm' | 'ollama' | 'tensorrt-llm' | 'transformers' | 'embedded';
+export type RuntimeBackendKind = 'auto' | 'vllm' | 'ollama' | 'tensorrt-llm' | 'transformers' | 'custom-llm' | 'embedded';
 export type SandboxModeKind = 'subprocess' | 'docker';
 
 export const env = {
@@ -75,7 +81,8 @@ export const env = {
   vllmBaseUrl: process.env.NEO_VLLM_URL || process.env.NEO_VLLM_BASE_URL || '',
   trtLlmBaseUrl: process.env.NEO_TRTLLM_URL || process.env.NEO_TENSORRT_LLM_BASE_URL || '',
   hfBaseUrl: process.env.NEO_HF_URL || process.env.NEO_HF_INFERENCE_BASE_URL || '',
-  customInferenceUrl: process.env.NEO_INFERENCE_URL || '',
+  customInferenceUrl: stripQuotes(process.env.NEO_INFERENCE_URL),
+  customInferenceApiKey: stripQuotes(process.env.NEO_INFERENCE_API_KEY),
   primaryModel: process.env.NEO_PRIMARY_MODEL || process.env.NEO_INFERENCE_MODEL || 'neo-embedded-core-v1',
   embeddingModel: process.env.NEO_EMBEDDING_MODEL || 'neo-embed-local-v2',
   modelsDir: process.env.NEO_MODELS_DIR || 'data/models',
@@ -105,7 +112,7 @@ export const env = {
   sessionSecret: configuredSessionSecret || EPHEMERAL_SESSION_SECRET,
   corsAllowedOrigins: (process.env.NEO_CORS_ORIGINS || '')
     .split(',')
-    .map((s) => s.trim())
+    .map((s) => s.trim().replace(/\/+$/, ''))
     .filter(Boolean),
 };
 
@@ -146,6 +153,13 @@ export function getConfiguredSubsystems() {
         configured: Boolean(env.hfBaseUrl),
         defaultModel: env.primaryModel,
         endpoint: env.hfBaseUrl || null,
+      },
+      {
+        id: 'custom-llm',
+        name: 'Custom OpenAI-Compatible Local LLM',
+        configured: Boolean(env.customInferenceUrl),
+        defaultModel: env.primaryModel,
+        endpoint: env.customInferenceUrl || null,
       },
     ],
     search: [

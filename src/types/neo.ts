@@ -1,5 +1,6 @@
 export type NavSection =
   | 'overview'
+  | 'chat'
   | 'tasks'
   | 'workbench'
   | 'memory'
@@ -7,6 +8,27 @@ export type NavSection =
   | 'tools'
   | 'evolution'
   | 'security';
+
+export interface ConversationInfo {
+  id: string;
+  tenant_id: string;
+  user_id: string | null;
+  title: string;
+  language: 'en' | 'fa' | 'ar' | 'nl';
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessageInfo {
+  id: string;
+  conversation_id: string;
+  tenant_id: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
 
 export interface HardwareProfileInfo {
   cpuModel: string;

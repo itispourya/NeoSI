@@ -21,11 +21,21 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
   public readonly kind: RuntimeKind;
   public readonly displayName: string;
   private readonly getBaseUrl: () => string;
+  private readonly getApiKey?: () => string;
 
-  constructor(kind: RuntimeKind, displayName: string, getBaseUrl: () => string) {
+  constructor(kind: RuntimeKind, displayName: string, getBaseUrl: () => string, getApiKey?: () => string) {
     this.kind = kind;
     this.displayName = displayName;
     this.getBaseUrl = getBaseUrl;
+    this.getApiKey = getApiKey;
+  }
+
+  private buildHeaders(includeContentType = false): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (includeContentType) headers['Content-Type'] = 'application/json';
+    const apiKey = this.getApiKey?.().trim();
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    return headers;
   }
 
   isConfigured(): boolean {
@@ -50,7 +60,10 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
     const start = Date.now();
     const probePath = this.kind === 'ollama' ? '/api/tags' : '/v1/models';
     try {
-      const res = await fetch(`${base}${probePath}`, { signal: AbortSignal.timeout(2500) });
+      const res = await fetch(`${base}${probePath}`, {
+        headers: this.buildHeaders(false),
+        signal: AbortSignal.timeout(1500),
+      });
       const latencyMs = Date.now() - start;
       if (!res.ok) {
         return {
@@ -95,14 +108,14 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
       try {
         const showRes = await fetch(`${base}/api/show`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: this.buildHeaders(true),
           body: JSON.stringify({ name: modelId }),
           signal: AbortSignal.timeout(3000),
         });
         if (showRes.ok) {
           return { ready: true, message: `Model '${modelId}' verified in Ollama runtime.` };
         }
-        const tagsRes = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(3000) });
+        const tagsRes = await fetch(`${base}/api/tags`, { headers: this.buildHeaders(false), signal: AbortSignal.timeout(3000) });
         if (tagsRes.ok) {
           const tags = (await tagsRes.json()) as { models?: Array<{ name?: string; model?: string }> };
           const found = (tags.models || []).some((m) => m.name === modelId || m.model === modelId);
@@ -121,7 +134,7 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
     }
 
     try {
-      const res = await fetch(`${base}/v1/models`, { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(`${base}/v1/models`, { headers: this.buildHeaders(false), signal: AbortSignal.timeout(3000) });
       if (!res.ok) {
         return { ready: false, message: `${this.displayName} /v1/models returned HTTP ${res.status}.` };
       }
@@ -174,7 +187,7 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
 
     const res = await fetch(`${base}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.buildHeaders(true),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(60_000),
     });
@@ -237,7 +250,7 @@ class SelfHostedOpenAiCompatibleRuntime implements ModelRuntime {
     ];
     const res = await fetch(`${base}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.buildHeaders(true),
       body: JSON.stringify({
         model: modelId,
         messages,
@@ -612,12 +625,34 @@ test('handles empty payload gracefully', () => {
 
   private synthesizeTextResponse(req: InferenceRequest): string {
     const prompt = req.prompt.trim();
-    const userQuestion = prompt.match(/User Request:\s*([\s\S]*)$/i)?.[1]?.trim() || prompt;
-    const ragSection = prompt.match(/Retrieved[^:]*:\n([\s\S]*?)(?:\n\nTool Evidence:|\n\nUser Request:|$)/i)?.[1]?.trim();
-    const evidenceSection = prompt.match(/Tool Evidence:\n([\s\S]*?)(?:\n\nUser Request:|$)/i)?.[1]?.trim();
+    const rawUserQuestion = prompt.match(/User Request:\s*([\s\S]*)$/i)?.[1]?.trim() || prompt;
+    const stripWrappers = (block?: string) =>
+      (block || '')
+        .replace(/\[UNTRUSTED_DATA[^\]]*\]/gi, '')
+        .replace(/\[\/UNTRUSTED_DATA\]/gi, '')
+        .trim();
 
-    // Exact arithmetic / benchmark math / logic evaluator on userQuestion for deterministic grounding
-    const mathMatch = userQuestion.match(/(?:calculate|compute|what is|evaluate)\s+(\(?[0-9][0-9\s+\-*/().]*[+\-*/][0-9\s+\-*/().]*[0-9)])/i);
+    const historySection = stripWrappers(
+      prompt.match(/Conversation History:\n([\s\S]*?)(?:\n\nRetrieved|\n\nTool|\n\nUser Request:|$)/i)?.[1]
+    );
+    const ragSection = stripWrappers(
+      prompt.match(/Retrieved[^:]*:\n([\s\S]*?)(?:\n\nTool (?:Evidence|Failures):|\n\nUser Request:|$)/i)?.[1]
+    );
+    const evidenceSection = stripWrappers(
+      prompt.match(/Tool Evidence:\n([\s\S]*?)(?:\n\nTool Failures:|\n\nUser Request:|$)/i)?.[1]
+    );
+
+    // Normalize Persian/Arabic digits and multiplication/division symbols for deterministic math evaluation
+    const normalizedForMath = rawUserQuestion
+      .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+      .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+      .replace(/×/g, '*')
+      .replace(/÷/g, '/');
+
+    const mathMatch =
+      normalizedForMath.match(
+        /(?:calculate|compute|what is|evaluate|حساب کن|محاسبه کن|حاصل|چند می شود|چند می‌شود|کم و زیاد)?\s*(\(?[0-9][0-9\s+\-*/().]*[+\-*/][0-9\s+\-*/().]*[0-9)])/i
+      );
     if (mathMatch) {
       const expr = mathMatch[1].trim();
       const val = safeArithmeticEval(expr);
@@ -627,21 +662,102 @@ test('handles empty payload gracefully', () => {
     }
 
     const lang: SupportedLanguage =
-      req.language || (/[\u0600-\u06FF]/.test(userQuestion) ? 'fa' : 'en');
+      req.language || (/[\u0600-\u06FF]/.test(rawUserQuestion) ? 'fa' : 'en');
+    const qLower = rawUserQuestion.toLowerCase();
 
-    const introByLang: Record<SupportedLanguage, string> = {
-      en: 'Neo Embedded Cognitive Core — Grounded Analysis',
-      fa: 'هسته شناختی مستقل Neo — تحلیل مبتنی بر حافظه و استدلال محلی',
-      ar: 'نواة Neo المعرفية المستقلة — تحليل مبني على الذاكرة المحلية',
-      nl: 'Neo Soevereine Cognitieve Kern — Lokale Synthese',
-    };
+    const isGreeting =
+      /^(سلام|درود|صبح بخیر|عصر بخیر|شب بخیر|خسته نباشی|چطوری|خوبی|hello|hi|hey|good (?:morning|afternoon|evening)|greetings|مرحبا|أهلا|السلام عليكم|hallo|goedemorgen)[!؟?\s.]*$/i.test(
+        rawUserQuestion.trim()
+      ) ||
+      (/\b(hello|hi|hey)\b/i.test(qLower) && rawUserQuestion.length < 40) ||
+      (/(سلام|درود|چطوری|خوبی)/.test(rawUserQuestion) && rawUserQuestion.length < 40);
 
-    if (ragSection || evidenceSection) {
-      const contextBlocks = [ragSection, evidenceSection ? `Tool Evidence:\n${evidenceSection}` : ''].filter(Boolean).join('\n\n');
-      return `${introByLang[lang]}\n\n${contextBlocks}\n\nConclusion for "${userQuestion.slice(0, 140)}": Derived strictly from Neo's persistent memory, verified tools, and deterministic inference core.`;
+    const isIdentityOrHelp =
+      /(کی هستی|چی هستی|معرفی کن|چه کاری|چیکار میتونی|چه قابلیت|قابلیت|کمک|راهنما|درباره تو|who are you|what are you|what can you do|capabilit|introduce yourself|help me|من أنت|ما قدراتك|wie ben je)/i.test(
+        rawUserQuestion
+      );
+
+    const isArchitectureQuery =
+      /(معماری|حافظه|۷ لایه|هفت لایه|امنیت|مدل|خودارتقا|architecture|memory layer|7-layer|knowledge graph|security|sandbox|self-evolution|ollama|vllm)/i.test(
+        rawUserQuestion
+      );
+
+    const isHistoryQuery =
+      /(قبلا چی|چت قبلی|خلاصه گفتگو|چه گفتم|earlier|previous message|what did i ask|what did i say|summarize (?:our|this) chat)/i.test(
+        rawUserQuestion
+      );
+
+    if (isGreeting) {
+      const greetings: Record<SupportedLanguage, string> = {
+        en: `Hello! I am **Neo**, your independent cognitive assistant.\n\nI can help you with:\n- **Multi-turn conversation** grounded in Neo's 7-layer persistent memory\n- **Verified 13-stage reasoning** & exact calculations\n- **Business & ledger audits**, autonomous engineering tasks, and knowledge research\n\nAsk any question or switch between **Streaming**, **Deep Reasoning**, and **Local Memory** modes in the header above.`,
+        fa: `سلام! من **Neo** هستم، دستیار شناختی مستقل شما.\n\nدر حال حاضر می‌توانم در این موارد به شما کمک کنم:\n- **گفتگوی چندمرحله‌ای** متصل به حافظه ۷ لایه و پایگاه دانش سیستم\n- **استدلال تاییدشده ۱۳ مرحله‌ای** و محاسبات دقیق ریاضی و مالی\n- **ممیزی کسب‌وکار، تحلیل داده‌ها، مهندسی کد** و جستجو در دانش ذخیره‌شده\n\nسوال یا درخواست خود را بنویسید، یا از نوار بالا حالت **Streaming**، **Deep Reasoning** یا **Local Memory** را انتخاب کنید.`,
+        ar: `مرحباً! أنا **Neo**، نظام الذكاء المعرفي المستقل الخاص بك. يمكنني مساعدتك في التحليل، الذاكرة المحلية، الحسابات الدقيقة، والمهام الهندسية. تفضل بطرح سؤالك.`,
+        nl: `Hallo! Ik ben **Neo**, jouw onafhankelijke cognitieve assistent. Ik help je graag met geheugengebaseerde antwoorden, berekeningen, audits en codeertaken.`,
+      };
+      return greetings[lang];
     }
 
-    return `${introByLang[lang]}\n\nProcessed "${userQuestion.slice(0, 180)}" locally on CPU via Neo Embedded Core (runtime=embedded, externalCloudAi=none). Connect Ollama or vLLM in Settings/Models to unlock open-weight neural generation alongside Neo's deterministic engine.`;
+    if (isIdentityOrHelp) {
+      const intro: Record<SupportedLanguage, string> = {
+        en: `I am **Neo**, an autonomous cognitive OS designed to run independently on your own infrastructure without external cloud AI lock-in.\n\n- **7-Layer Cognitive Memory**: Working, episodic, semantic, procedural, personal, organizational, and temporal recall.\n- **Multi-Runtime Inference**: Routes seamlessly across local **Ollama / vLLM / TensorRT-LLM / Transformers** models, or falls back reliably to the CPU **Embedded Core**.\n- **13-Stage Reasoning & Verification**: Plans tool calls, cross-checks evidence with Critic verification, and executes generated code inside an isolated subprocess sandbox.\n\n*Tip:* If you attach a local open-weight model (such as Qwen or Llama via Ollama/vLLM) in **Models & Bench**, my Streaming chat responses automatically gain full open-weight neural generation.`,
+        fa: `من **Neo** هستم؛ یک هسته هوش مصنوعی مستقل و خودگردان که برای اجرا روی زیرساخت خودتان بدون وابستگی به APIهای ابری طراحی شده‌ام.\n\n- **حافظه شناختی ۷ لایه**: ثبت و بازیابی دانش معنایی، رویه‌ای، اپیزودیک، زمانی، سازمانی و گراف دانش.\n- **موتور استنتاج چندگانه**: پشتیبانی از مدل‌های محلی **Ollama / vLLM / TensorRT-LLM / Transformers** به همراه هسته CPU داخلی برای پایداری همیشگی.\n- **استدلال ۱۳ مرحله‌ای و سندباکس امن**: برنامه‌ریزی ابزارها، راستی‌آزمایی خروجی توسط Critic و اجرای کد در محیط ایزوله.\n\n*نکته:* با اتصال یک مدل محلی بازمتن (مانند Qwen یا Llama روی Ollama/vLLM) در بخش **Models & Bench**، پاسخ‌های گفتگوی من از تولید عصبی مدل بزرگ هم استفاده خواهند کرد.`,
+        ar: `أنا **Neo**، نظام ذكاء مستقل يعمل على بنيتك التحتية المحلية مع ذاكرة من 7 طبقات ومحرك استدلال متحقق وموجه نماذج مفتوحة الوزن.`,
+        nl: `Ik ben **Neo**, een zelfstandig cognitief systeem met een 7-laags geheugen, geverifieerde 13-staps redenering en ondersteuning voor lokale open-weight modellen via Ollama of vLLM.`,
+      };
+      return intro[lang];
+    }
+
+    if (isHistoryQuery && historySection) {
+      const historyLines = historySection.split('\n').filter(Boolean).slice(-6);
+      if (lang === 'fa') {
+        return `خلاصه پیام‌های اخیر در این گفتگو:\n\n${historyLines.map((l) => `- ${l}`).join('\n')}`;
+      }
+      return `Recent conversation turns:\n\n${historyLines.map((l) => `- ${l}`).join('\n')}`;
+    }
+
+    if (isArchitectureQuery && !ragSection && !evidenceSection) {
+      const arch: Record<SupportedLanguage, string> = {
+        en: `**Neo Cognitive & Security Architecture**\n\n- **Memory Pipeline**: Hybrid vector + BM25 + temporal decay retrieval across 7 isolated memory layers scoped per tenant.\n- **Prompt-Injection Defense**: Workspace context, conversation history, retrieved memories, and external web content are quarantined as untrusted data blocks.\n- **Execution Safety**: Generated code and promoted API Forge modules run strictly inside an isolated subprocess sandbox with sanitized environment variables.\n- **Model Routing**: Automatically routes across healthy local vLLM/Ollama/Transformers endpoints and safely falls back to the CPU Embedded Core.`,
+        fa: `**معماری شناختی و امنیتی Neo**\n\n- **ساختار حافظه ۷ لایه**: بازیابی ترکیبی (برداری + BM25 + زوال زمانی) با جداسازی کامل داده‌های هر Workspace/Tenant.\n- **دفاع در برابر تزریق دستور (Prompt Injection)**: تاریخچه گفتگو، حافظه‌های بازیابی‌شده و داده‌های وب به‌عنوان داده غیرمعتبر جداسازی می‌شوند تا دستورالعمل‌های مخرب اجرا نشوند.\n- **اجرای امن کد**: تمام ماژول‌های تولیدشده در سندباکس مجزا با متغیرهای محیطی پاک‌سازی‌شده اجرا می‌شوند.\n- **مسیریابی مدل‌ها**: انتخاب خودکار بین سرورهای محلی Ollama / vLLM / Transformers و هسته CPU داخلی.`,
+        ar: `تعتمد بنية Neo على ذاكرة هجينة من 7 طبقات مع عزل كامل للمستأجرين وحماية ضد حقن الأوامر وتشغيل الأكواد في بيئة معزولة.`,
+        nl: `De Neo-architectuur combineert een 7-laags hybride geheugen met strikte tenant-isolatie, prompt-injection-afscherming en een subprocess-sandbox.`,
+      };
+      return arch[lang];
+    }
+
+    if (ragSection || evidenceSection) {
+      const blocks: string[] = [];
+      if (ragSection) {
+        blocks.push(
+          lang === 'fa'
+            ? `**اطلاعات بازیابی‌شده از حافظه و مهارت‌های Neo:**\n${ragSection}`
+            : `**Retrieved from Neo Memory & Playbooks:**\n${ragSection}`
+        );
+      }
+      if (evidenceSection) {
+        blocks.push(
+          lang === 'fa'
+            ? `**شواهد و خروجی ابزارها:**\n${evidenceSection}`
+            : `**Verified Tool Evidence:**\n${evidenceSection}`
+        );
+      }
+      const footerByLang: Record<SupportedLanguage, string> = {
+        en: `Grounded analysis for *"${rawUserQuestion.slice(0, 140)}"* synthesized from Neo's persistent memory and verified tool results.`,
+        fa: `تحلیل فوق برای پرسش *«${rawUserQuestion.slice(0, 140)}»* مستقیماً بر اساس حافظه داخلی Neo و شواهد تاییدشده ابزارها استخراج شد.`,
+        ar: `تم استخلاص هذه الإجابة لـ "${rawUserQuestion.slice(0, 140)}" استناداً إلى الذاكرة المحلية والأدوات المتحققة.`,
+        nl: `Antwoord voor *"${rawUserQuestion.slice(0, 140)}"* op basis van lokaal geheugen en geverifieerde tool-uitvoer.`,
+      };
+      blocks.push(footerByLang[lang]);
+      return blocks.join('\n\n');
+    }
+
+    const fallbackResponses: Record<SupportedLanguage, string> = {
+      en: `I received your message: *"${rawUserQuestion.slice(0, 160)}"*.\n\nRight now Neo is running on the **CPU Embedded Core** with no matching record in local memory for this specific topic yet, and no external Ollama/vLLM model server is attached.\n\nYou can:\n1. Use **Deep Reasoning** mode to execute multi-step planning and verification.\n2. Ingest documents or URLs in **Memory & Graph** so I can answer domain questions with citations.\n3. Connect a local open-weight model in **Models & Bench** for full open-ended neural generation.`,
+      fa: `پیام شما را دریافت کردم: *«${rawUserQuestion.slice(0, 160)}»*\n\nدر حال حاضر هسته **Embedded CPU** فعال است و هنوز دانش یا حافظه مرتبطی درباره این موضوع خاص ثبت نشده است (و سرور مدل محلی Ollama/vLLM متصل نیست).\n\nبرای نتیجه دقیق‌تر می‌توانید:\n1. حالت **Deep Reasoning** را انتخاب کنید تا برنامه‌ریزی ۱۳ مرحله‌ای و ابزارها اجرا شوند.\n2. در بخش **Memory & Graph** مستندات یا موضوعات تخصصی را ثبت کنید تا پاسخ‌ها دقیقاً با استناد به دانش شما تولید شوند.\n3. در بخش **Models & Bench** یک مدل محلی بازمتن (Ollama یا vLLM) متصل کنید تا تولید متن کامل عصبی فعال شود.`,
+      ar: `استلمت رسالتك: "${rawUserQuestion.slice(0, 160)}". يعمل النظام حالياً عبر النواة المدمجة بدون سجل ذاكرة مطابق لهذا الموضوع أو خادم Ollama/vLLM متصل.`,
+      nl: `Ik heb je bericht ontvangen: *"${rawUserQuestion.slice(0, 160)}"*. Momenteel draait Neo op de ingebouwde CPU-kern zonder gekoppelde Ollama/vLLM-modelserver of opgeslagen geheugen voor dit onderwerp.`,
+    };
+    return fallbackResponses[lang];
   }
 
   async generate(req: InferenceRequest, modelId = 'neo-embedded-core-v1'): Promise<InferenceResponse> {
@@ -740,10 +856,11 @@ export function safeArithmeticEval(expr: string): number | null {
 
 export function createRuntimes(): Record<RuntimeKind, ModelRuntime> {
   return {
-    vllm: new SelfHostedOpenAiCompatibleRuntime('vllm', 'vLLM High-Throughput Server', () => env.vllmBaseUrl || env.customInferenceUrl),
-    ollama: new SelfHostedOpenAiCompatibleRuntime('ollama', 'Ollama Local Model Runtime', () => env.ollamaBaseUrl),
-    'tensorrt-llm': new SelfHostedOpenAiCompatibleRuntime('tensorrt-llm', 'NVIDIA TensorRT-LLM Engine', () => env.trtLlmBaseUrl),
-    transformers: new SelfHostedOpenAiCompatibleRuntime('transformers', 'HuggingFace Transformers Server', () => env.hfBaseUrl),
+    vllm: new SelfHostedOpenAiCompatibleRuntime('vllm', 'vLLM High-Throughput Server', () => env.vllmBaseUrl, () => env.customInferenceApiKey),
+    ollama: new SelfHostedOpenAiCompatibleRuntime('ollama', 'Ollama Local Model Runtime', () => env.ollamaBaseUrl, () => env.customInferenceApiKey),
+    'tensorrt-llm': new SelfHostedOpenAiCompatibleRuntime('tensorrt-llm', 'NVIDIA TensorRT-LLM Engine', () => env.trtLlmBaseUrl, () => env.customInferenceApiKey),
+    transformers: new SelfHostedOpenAiCompatibleRuntime('transformers', 'HuggingFace Transformers Server', () => env.hfBaseUrl, () => env.customInferenceApiKey),
+    'custom-llm': new SelfHostedOpenAiCompatibleRuntime('custom-llm', 'Custom OpenAI-Compatible Local LLM', () => env.customInferenceUrl, () => env.customInferenceApiKey),
     embedded: new NeoEmbeddedRuntime(),
   };
 }

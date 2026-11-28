@@ -5,7 +5,7 @@ export interface EmbeddingResult {
   vector: number[];
   model: string;
   dim: number;
-  runtime: 'ollama' | 'vllm' | 'transformers' | 'embedded';
+  runtime: 'ollama' | 'vllm' | 'transformers' | 'custom-llm' | 'embedded';
   isNeural: boolean;
 }
 
@@ -62,13 +62,17 @@ export class LocalEmbeddingEngine {
       }
     }
 
-    // 2. Try vLLM / HuggingFace TEI OpenAI-compatible local /v1/embeddings endpoint
+    // 2. Try vLLM / HuggingFace TEI / Custom OpenAI-compatible local /v1/embeddings endpoint
     const compatBase = (env.vllmBaseUrl || env.hfBaseUrl || env.customInferenceUrl || '').replace(/\/+$/, '');
     if (compatBase && env.embeddingModel !== 'neo-embed-local-v2') {
       try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (!env.vllmBaseUrl && !env.hfBaseUrl && env.customInferenceApiKey) {
+          headers.Authorization = `Bearer ${env.customInferenceApiKey}`;
+        }
         const res = await fetch(`${compatBase}/v1/embeddings`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ model: env.embeddingModel, input: clean }),
           signal: AbortSignal.timeout(4000),
         });
@@ -80,7 +84,7 @@ export class LocalEmbeddingEngine {
               vector: emb,
               model: env.embeddingModel,
               dim: emb.length,
-              runtime: env.vllmBaseUrl ? 'vllm' : 'transformers',
+              runtime: env.vllmBaseUrl ? 'vllm' : env.hfBaseUrl ? 'transformers' : 'custom-llm',
               isNeural: true,
             };
           }

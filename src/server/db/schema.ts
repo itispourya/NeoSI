@@ -386,7 +386,7 @@ export interface ModelRecord {
   id: string;
   name: string;
   version: string;
-  runtime: 'embedded' | 'ollama' | 'vllm' | 'tensorrt-llm' | 'transformers';
+  runtime: 'embedded' | 'ollama' | 'vllm' | 'tensorrt-llm' | 'transformers' | 'custom-llm';
   architecture: string;
   source_repo: string;
   license: string;

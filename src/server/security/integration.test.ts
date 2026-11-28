@@ -153,6 +153,57 @@ test('Strict cross-tenant isolation prevents Tenant B from accessing Tenant A me
   const chatRes = await clientA.chat({ message: 'Calculate 20 * 5' });
   assert.ok(chatRes.reply.includes('100'));
 
+  // Multi-turn Persian chatbot conversation with auto language detection and SSE streaming
+  const faChat = (await clientA.chat({ message: 'سلام! تو کی هستی؟' })) as {
+    conversationId: string;
+    reply: string;
+    language?: string;
+  };
+  assert.equal(faChat.language, 'fa');
+  assert.ok(faChat.reply.includes('Neo'));
+  assert.ok(/[\u0600-\u06FF]/.test(faChat.reply));
+
+  const streamRes = await fetch(`${baseUrl}/api/v1/chat/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${keyA.rawKey}`,
+    },
+    body: JSON.stringify({
+      conversationId: faChat.conversationId,
+      message: 'حاصل ۱۲ * ۳ چند می‌شود؟',
+    }),
+  });
+  assert.equal(streamRes.status, 200);
+  const sseBody = await streamRes.text();
+  assert.ok(sseBody.includes('"language":"fa"'));
+  assert.ok(sseBody.includes('36'));
+
+  // Tenant A can inspect conversation messages; Tenant B cannot read or delete Tenant A's conversation
+  const aMsgsRes = await fetch(`${baseUrl}/api/v1/conversations/${faChat.conversationId}/messages`, {
+    headers: { Authorization: `Bearer ${keyA.rawKey}` },
+  });
+  assert.equal(aMsgsRes.status, 200);
+  const aMsgsJson = (await aMsgsRes.json()) as { messages: Array<{ role: string; content: string }> };
+  assert.equal(aMsgsJson.messages.length, 4);
+
+  const bMsgsRes = await fetch(`${baseUrl}/api/v1/conversations/${faChat.conversationId}/messages`, {
+    headers: { Authorization: `Bearer ${keyB.rawKey}` },
+  });
+  assert.equal(bMsgsRes.status, 404);
+
+  const bDelRes = await fetch(`${baseUrl}/api/v1/conversations/${faChat.conversationId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${keyB.rawKey}` },
+  });
+  assert.equal(bDelRes.status, 404);
+
+  const aDelRes = await fetch(`${baseUrl}/api/v1/conversations/${faChat.conversationId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${keyA.rawKey}` },
+  });
+  assert.equal(aDelRes.status, 200);
+
   // Memory PATCH preserves embedding metadata and reindex works cleanly
   const patched = await clientA.memory.update(memId, { content: 'Tenant Alpha revised Q4 reserve is $1,050,000.' });
   assert.equal(patched.memory.embedding_model, 'neo-embed-local-v2');

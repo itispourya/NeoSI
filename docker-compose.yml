@@ -31,11 +31,28 @@ services:
 
   ollama:
     image: ollama/ollama:latest
-    profiles: ["dev", "gpu-single"]
+    profiles: ["dev", "gpu-single", "ollama"]
     ports:
       - "127.0.0.1:11434:11434"
     volumes:
       - neo_ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      NEO_PRIMARY_MODEL: ${NEO_PRIMARY_MODEL:-qwen2.5:3b-instruct}
+    entrypoint: ["/bin/sh", "-c", "ollama pull \"$NEO_PRIMARY_MODEL\""]
+    restart: "no"
 
   vllm-gpu:
     image: vllm/vllm-openai:latest
@@ -69,8 +86,12 @@ services:
       DATABASE_URL: postgresql://neo:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the .env file}@postgres:5432/neo
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in the .env file}@redis:6379
       NEO_RUNTIME_DEFAULT: auto
+      NEO_PRIMARY_MODEL: ${NEO_PRIMARY_MODEL:-qwen2.5:3b-instruct}
       NEO_OLLAMA_BASE_URL: http://ollama:11434
       NEO_VLLM_BASE_URL: http://vllm-gpu:8000
+      NEO_INFERENCE_URL: ${NEO_INFERENCE_URL:-}
+      NEO_INFERENCE_API_KEY: ${NEO_INFERENCE_API_KEY:-}
+      NEO_CORS_ORIGINS: ${NEO_CORS_ORIGINS:-}
       NEO_SANDBOX_MODE: ${NEO_SANDBOX_MODE:-subprocess}
       NEO_SESSION_SECRET: ${NEO_SESSION_SECRET:?Set NEO_SESSION_SECRET to at least 32 random bytes in the .env file}
       NEO_ADMIN_PASSCODE: ${NEO_ADMIN_PASSCODE:-}

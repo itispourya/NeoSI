@@ -14,7 +14,7 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
   const [showRegister, setShowRegister] = useState(false);
   const [regId, setRegId] = useState('');
   const [regName, setRegName] = useState('');
-  const [regRuntime, setRegRuntime] = useState<'ollama' | 'vllm' | 'transformers' | 'tensorrt-llm'>('ollama');
+  const [regRuntime, setRegRuntime] = useState<'ollama' | 'vllm' | 'transformers' | 'tensorrt-llm' | 'custom-llm'>('ollama');
   const [regArch, setRegArch] = useState('qwen2.5');
   const [regRepo, setRegRepo] = useState('Qwen/Qwen2.5-7B-Instruct');
   const [regLicense, setRegLicense] = useState('Apache-2.0');
@@ -210,13 +210,14 @@ export function ModelsView({ data, onRefresh }: ModelsViewProps) {
             />
             <select
               value={regRuntime}
-              onChange={(e) => setRegRuntime(e.target.value as 'ollama' | 'vllm' | 'transformers' | 'tensorrt-llm')}
+              onChange={(e) => setRegRuntime(e.target.value as 'ollama' | 'vllm' | 'transformers' | 'tensorrt-llm' | 'custom-llm')}
               className="px-3 py-2 bg-[#111827] border border-slate-700 rounded text-slate-200"
             >
               <option value="ollama">ollama</option>
               <option value="vllm">vllm</option>
               <option value="transformers">transformers</option>
               <option value="tensorrt-llm">tensorrt-llm</option>
+              <option value="custom-llm">custom-llm</option>
             </select>
             <input
               type="text"

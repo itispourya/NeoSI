@@ -13,6 +13,7 @@ interface TopBarProps {
 
 const SECTION_TITLES: Record<NavSection, string> = {
   overview: 'System Overview & Hardware Telemetry',
+  chat: 'Neo Conversational Assistant',
   tasks: 'Durable Autonomous Agent Runtime',
   workbench: 'Cognitive Reasoning & Business Audit Lab',
   memory: '7-Layer Memory, Knowledge Graph & Research',

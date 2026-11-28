@@ -70,6 +70,27 @@ export class NeoAiClient {
     }
   }
 
+  chatCompletions(input: {
+    model?: string;
+    messages: Array<{ role: 'system' | 'developer' | 'user' | 'assistant' | 'tool'; content: string | Array<{ type: string; text?: string }> }>;
+    temperature?: number;
+    max_tokens?: number;
+    language?: NeosLanguage;
+    workspaceContext?: Record<string, unknown>;
+  }) {
+    return this.request<{
+      id: string;
+      object: 'chat.completion';
+      created: number;
+      model: string;
+      choices: Array<{ index: number; message: { role: 'assistant'; content: string }; finish_reason: string }>;
+      usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    }>('/v1/chat/completions', {
+      method: 'POST',
+      body: JSON.stringify({ ...input, stream: false }),
+    });
+  }
+
   analyzeBusiness(payload: Record<string, unknown>) {
     return this.request('/api/v1/business/analyze', { method: 'POST', body: JSON.stringify(payload) });
   }

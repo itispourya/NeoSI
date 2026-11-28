@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { ChatView } from './components/ChatView';
 import { EvolutionView } from './components/EvolutionView';
 import { MemoryGraphView } from './components/MemoryGraphView';
 import { ModelsView } from './components/ModelsView';
@@ -177,6 +178,7 @@ export default function App() {
           ) : data ? (
             <>
               {section === 'overview' && <OverviewView data={data} onNavigate={setSection} />}
+              {section === 'chat' && <ChatView />}
               {section === 'tasks' && <TasksView data={data} onRefresh={loadOverview} />}
               {section === 'workbench' && <WorkbenchView />}
               {section === 'memory' && <MemoryGraphView data={data} onRefresh={loadOverview} />}

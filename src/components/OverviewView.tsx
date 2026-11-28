@@ -14,6 +14,22 @@ export function OverviewView({ data, onNavigate }: OverviewViewProps) {
 
   return (
     <div className="space-y-6">
+      <div className="bg-[#111827] border border-slate-800 rounded p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <div className="font-display text-sm font-semibold text-slate-100">Interactive Neo Chatbot</div>
+          <div className="text-xs text-slate-400">
+            Start a persistent multilingual conversation grounded in Neo&apos;s 7-layer memory and 13-stage verified reasoning.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => onNavigate('chat')}
+          className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-xs font-medium text-white whitespace-nowrap shrink-0 self-start sm:self-auto"
+        >
+          Open Chatbot →
+        </button>
+      </div>
+
       {/* Primary KPI Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="bg-[#111827] border border-slate-800 rounded p-4">

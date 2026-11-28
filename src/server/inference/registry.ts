@@ -334,6 +334,22 @@ export class NeoModelRegistry implements ModelRegistry {
 
 export class NeoInferenceEngine implements InferenceEngine {
   private runtimes = createRuntimes();
+  private healthCache = new Map<RuntimeKind, { healthy: boolean; checkedAt: number }>();
+
+  private async isRuntimeHealthyCached(kind: RuntimeKind): Promise<boolean> {
+    const rt = this.runtimes[kind];
+    if (!rt || !rt.isConfigured()) return false;
+    if (kind === 'embedded') return true;
+    const cached = this.healthCache.get(kind);
+    const now = Date.now();
+    if (cached && now - cached.checkedAt < 15_000) {
+      return cached.healthy;
+    }
+    const status = await rt.healthCheck().catch(() => null);
+    const healthy = status?.status === 'healthy';
+    this.healthCache.set(kind, { healthy, checkedAt: now });
+    return healthy;
+  }
 
   private async selectExecutionChain(req: InferenceRequest): Promise<Array<{ runtime: RuntimeKind; modelId: string }>> {
     const chain: Array<{ runtime: RuntimeKind; modelId: string }> = [];
@@ -366,22 +382,39 @@ export class NeoInferenceEngine implements InferenceEngine {
       (m) => m.deployment_status === 'active' && m.download_status === 'ready' && (m.roles.includes(role) || m.roles.includes('primary'))
     );
 
-    // Prefer non-embedded active self-hosted models when healthy/configured, then embedded fallback
+    // 1. Prefer explicitly activated non-embedded self-hosted models when configured
     for (const m of activeForRole) {
       if (m.runtime !== 'embedded' && this.runtimes[m.runtime]?.isConfigured()) {
         pushUnique(m.runtime, m.id);
       }
     }
 
-    if (env.runtimeDefault !== 'auto' && env.runtimeDefault !== 'embedded' && this.runtimes[env.runtimeDefault]?.isConfigured()) {
-      pushUnique(env.runtimeDefault, env.primaryModel);
+    // 2. Try explicitly requested model ID against registered or healthy local/private LLM runtimes
+    if (req.preferredModelId && req.preferredModelId !== 'neo-embedded-core-v1' && req.preferredModelId !== 'neo-ai-v1') {
+      const registered = await db.getModelById(req.preferredModelId);
+      if (registered && registered.runtime !== 'embedded' && this.runtimes[registered.runtime]?.isConfigured()) {
+        pushUnique(registered.runtime, registered.id);
+      } else {
+        for (const rtKind of ['custom-llm', 'vllm', 'tensorrt-llm', 'transformers', 'ollama'] as const) {
+          if (await this.isRuntimeHealthyCached(rtKind)) {
+            pushUnique(rtKind, req.preferredModelId);
+          }
+        }
+      }
     }
 
-    if (req.strictTarget) {
-      if (chain.length === 0) {
-        throw new Error('Strict inference target requires a registered model and a configured runtime.');
+    // 3. Respect explicit NEO_RUNTIME_DEFAULT or auto-prefer healthy configured local LLM runtimes
+    const preferredPrimaryModel =
+      env.primaryModel && env.primaryModel !== 'neo-embedded-core-v1' ? env.primaryModel : 'qwen2.5:3b-instruct';
+
+    if (env.runtimeDefault !== 'auto' && env.runtimeDefault !== 'embedded' && this.runtimes[env.runtimeDefault]?.isConfigured()) {
+      pushUnique(env.runtimeDefault, preferredPrimaryModel);
+    } else if (env.runtimeDefault === 'auto') {
+      for (const rtKind of ['custom-llm', 'vllm', 'tensorrt-llm', 'transformers', 'ollama'] as const) {
+        if (await this.isRuntimeHealthyCached(rtKind)) {
+          pushUnique(rtKind, preferredPrimaryModel);
+        }
       }
-      return chain.slice(0, 1);
     }
 
     pushUnique('embedded', 'neo-embedded-core-v1');

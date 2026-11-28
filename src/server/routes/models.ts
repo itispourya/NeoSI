@@ -18,7 +18,33 @@ modelsRouter.get('/models', requireApiGatewayAuth('read'), asyncHandler(async (_
     db.listModelEvaluations(undefined, 20),
     inspectHardware(),
   ]);
-  res.json({ models, compatibility, evaluations, hardware });
+  const openAiModelsMap = new Map<string, { id: string; object: 'model'; created: number; owned_by: string }>();
+  const createdTs = Math.floor(Date.now() / 1000);
+  openAiModelsMap.set('neo-ai-v1', { id: 'neo-ai-v1', object: 'model', created: createdTs, owned_by: 'neo' });
+  openAiModelsMap.set('neo-embedded-core-v1', {
+    id: 'neo-embedded-core-v1',
+    object: 'model',
+    created: createdTs,
+    owned_by: 'neo',
+  });
+  for (const m of models) {
+    if (m.deployment_status === 'active' || m.download_status === 'ready' || m.runtime === 'embedded') {
+      openAiModelsMap.set(m.id, {
+        id: m.id,
+        object: 'model',
+        created: createdTs,
+        owned_by: `neo:${m.runtime}`,
+      });
+    }
+  }
+  res.json({
+    object: 'list',
+    data: Array.from(openAiModelsMap.values()),
+    models,
+    compatibility,
+    evaluations,
+    hardware,
+  });
 }));
 
 modelsRouter.get('/models/health', requireApiGatewayAuth('read'), asyncHandler(async (_req, res) => {
@@ -30,7 +56,7 @@ const registerModelSchema = z.object({
   id: z.string().min(2).max(120),
   name: z.string().min(2).max(120),
   version: z.string().optional(),
-  runtime: z.enum(['embedded', 'ollama', 'vllm', 'tensorrt-llm', 'transformers']),
+  runtime: z.enum(['embedded', 'ollama', 'vllm', 'tensorrt-llm', 'transformers', 'custom-llm']),
   architecture: z.string().min(2).max(80),
   source_repo: z.string().min(2).max(200),
   license: z.string().min(2).max(80),
